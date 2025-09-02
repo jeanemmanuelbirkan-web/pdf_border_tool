@@ -29,7 +29,7 @@ jobs:
         pyinstaller --onefile --windowed --name=PDFBorderTool-Windows --distpath=dist/windows main.py
     
     - name: Upload Windows executable
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: PDFBorderTool-Windows
         path: dist/windows/PDFBorderTool-Windows.exe
@@ -61,7 +61,7 @@ jobs:
         pyinstaller --onefile --name=PDFBorderTool-Linux --distpath=dist/linux main.py
     
     - name: Upload Linux executable
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: PDFBorderTool-Linux
         path: dist/linux/PDFBorderTool-Linux
@@ -88,7 +88,7 @@ jobs:
         pyinstaller --onefile --windowed --name=PDFBorderTool-macOS --distpath=dist/macos main.py
     
     - name: Upload macOS executable
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: PDFBorderTool-macOS
         path: dist/macos/PDFBorderTool-macOS
