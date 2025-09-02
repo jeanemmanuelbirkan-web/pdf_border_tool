@@ -5,6 +5,7 @@ PDF Processor - Main engine for PDF manipulation and border addition
 import os
 import fitz  # PyMuPDF
 import tempfile
+import io
 from pathlib import Path
 from PIL import Image, ImageEnhance
 import numpy as np
@@ -216,7 +217,6 @@ class PDFProcessor:
         img_bytes = img_data["image"]
         
         # Convert to PIL Image
-        import io
         image = Image.open(io.BytesIO(img_bytes))
         
         return image
@@ -259,7 +259,6 @@ class PDFProcessor:
             new_image: PIL.Image - New image to insert
         """
         # Save new image to temporary file
-        import io
         img_buffer = io.BytesIO()
         
         # Convert to appropriate format
@@ -286,9 +285,6 @@ class PDFProcessor:
             old_rect.x1 + border_pixels,
             old_rect.y1 + border_pixels
         )
-        
-        # Remove old image
-        # Note: PyMuPDF doesn't have direct image replacement, so we overlay
         
         # Insert new image
         page.insert_image(new_rect, stream=img_buffer.getvalue())
@@ -349,4 +345,54 @@ class PDFProcessor:
         return str(output_path)
     
     def _create_backup(self, input_path):
-        "
+        """
+        Create backup of original file
+        
+        Args:
+            input_path (str): Path to original file
+        """
+        input_path = Path(input_path)
+        backup_path = input_path.parent / f"{input_path.stem}_backup{input_path.suffix}"
+        
+        # Copy file
+        import shutil
+        shutil.copy2(input_path, backup_path)
+        print(f"Created backup: {backup_path.name}")
+    
+    def _add_processing_metadata(self, pdf_path):
+        """
+        Add processing information to PDF metadata
+        
+        Args:
+            pdf_path (str): Path to processed PDF
+        """
+        doc = fitz.open(pdf_path)
+        try:
+            # Get existing metadata
+            metadata = doc.metadata
+            
+            # Add processing info
+            processing_info = f"Processed with PDF Border Tool on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            processing_info += f" - Added {self.settings.get('border_width_mm', 3)}mm border"
+            
+            metadata['subject'] = processing_info
+            metadata['producer'] = 'PDF Border Tool - L\'Oréal'
+            
+            # Set updated metadata
+            doc.set_metadata(metadata)
+            doc.save(pdf_path, incremental=True)
+            
+        finally:
+            doc.close()
+    
+    def _mm_to_points(self, mm):
+        """
+        Convert millimeters to PDF points
+        
+        Args:
+            mm (float): Millimeters
+            
+        Returns:
+            float: Points
+        """
+        return mm * 2.834645669  # 1mm = 2.834645669 points
