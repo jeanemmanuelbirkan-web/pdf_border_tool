@@ -249,49 +249,122 @@ class PDFProcessor:
         
         return processed_image
     
-    def _replace_image_in_page(self, page, image_info, new_image):
-        """
-        Replace image in PDF page with processed version
+def _replace_image_in_page(self, page, image_info, new_image):
+    """
+    Replace image in PDF page with processed version
+    
+    Args:
+        page: PyMuPDF page object
+        image_info: Original image information
+        new_image: PIL.Image - New image to insert
+    """
+    # Convert to appropriate format
+    if new_image.mode in ('RGBA', 'LA'):
+        # Convert transparency to white background
+        background = Image.new('RGB', new_image.size, (255, 255, 255))
+        if new_image.mode == 'RGBA':
+            background.paste(new_image, mask=new_image.split()[-1])
+        else:
+            background.paste(new_image)
+        new_image = background
+    elif new_image.mode != 'RGB':
+        new_image = new_image.convert('RGB')
+    
+    # Save new image to buffer
+    img_buffer = io.BytesIO()
+    quality = max(10, 100 - self.settings.get('compression_level', 15))  # Higher quality
+    new_image.save(img_buffer, format='JPEG', quality=quality, optimize=True)
+    img_buffer.seek(0)
+    
+    # Get original image rectangle
+    old_rect = image_info['rect']
+    
+    # Calculate border expansion
+    border_width_mm = self.settings.get('border_width_mm', 3)
+    border_points = self._mm_to_points(border_width_mm)
+    
+    # Calculate new rectangle (centered expansion)
+    new_rect = fitz.Rect(
+        old_rect.x0 - border_points,
+        old_rect.y0 - border_points,
+        old_rect.x1 + border_points,
+        old_rect.y1 + border_points
+    )
+    
+    # Method 1: Remove old image and insert new one
+    try:
+        # First, cover the old image area with page background color
+        page.draw_rect(old_rect, color=(1, 1, 1), fill=(1, 1, 1))
         
-        Args:
-            page: PyMuPDF page object
-            image_info: Original image information
-            new_image: PIL.Image - New image to insert
-        """
-        # Save new image to temporary file
-        img_buffer = io.BytesIO()
-        
-        # Convert to appropriate format
-        if new_image.mode in ('RGBA', 'LA'):
-            # Convert transparency to white background
-            background = Image.new('RGB', new_image.size, (255, 255, 255))
-            background.paste(new_image, mask=new_image.split()[-1] if new_image.mode == 'RGBA' else None)
-            new_image = background
-        elif new_image.mode != 'RGB':
-            new_image = new_image.convert('RGB')
-        
-        # Save as JPEG with specified quality
-        quality = 100 - self.settings.get('compression_level', 85)
-        new_image.save(img_buffer, format='JPEG', quality=quality, optimize=True)
-        img_buffer.seek(0)
-        
-        # Calculate new rectangle (expanded for border)
-        old_rect = image_info['rect']
-        border_pixels = self._mm_to_points(self.settings.get('border_width_mm', 3))
-        
-        new_rect = fitz.Rect(
-            old_rect.x0 - border_pixels,
-            old_rect.y0 - border_pixels,
-            old_rect.x1 + border_pixels,
-            old_rect.y1 + border_pixels
-        )
-        
-        # Insert new image
+        # Insert the new bordered image
         page.insert_image(new_rect, stream=img_buffer.getvalue())
         
-        # Cover the old image with a white rectangle
-        white_rect = fitz.Rect(old_rect.x0, old_rect.y0, old_rect.x1, old_rect.y1)
-        page.draw_rect(white_rect, color=(1, 1, 1), fill=(1, 1, 1))
+        print(f"Successfully replaced image: old rect {old_rect}, new rect {new_rect}")
+        
+    except Exception as e:
+        print(f"Error replacing image: {e}")
+        # Fallback: try alternative method
+        self._replace_image_alternative(page, image_info, new_image, old_rect, new_rect)
+
+    def _replace_image_alternative(self, page, image_info, new_image, old_rect, new_rect):
+    """
+    Alternative image replacement method
+    
+    Args:
+        page: PyMuPDF page object
+        image_info: Original image information
+        new_image: PIL.Image - New image to insert
+        old_rect: Original image rectangle
+        new_rect: New image rectangle
+    """
+    try:
+        # Method 2: Direct image replacement via xref
+        doc = page.parent
+        
+        # Save new image to buffer
+        img_buffer = io.BytesIO()
+        new_image.save(img_buffer, format='JPEG', quality=90)
+        img_buffer.seek(0)
+        
+        # Replace the image data in the PDF
+        # This updates the actual image object rather than overlaying
+        img_xref = image_info['xref']
+        
+        # Update the image
+        doc._update_stream(img_xref, img_buffer.getvalue())
+        
+        # Update image positioning if needed
+        # (This is more complex and may require additional PDF manipulation)
+        
+        print("Used alternative image replacement method")
+        
+    except Exception as e:
+        print(f"Alternative replacement also failed: {e}")
+        # Final fallback: simple overlay with better positioning
+        self._simple_image_overlay(page, new_image, new_rect)
+
+def _simple_image_overlay(self, page, new_image, new_rect):
+    """
+    Simple image overlay as final fallback
+    
+    Args:
+        page: PyMuPDF page object
+        new_image: PIL.Image - New image to insert
+        new_rect: Rectangle for new image
+    """
+    try:
+        # Save image
+        img_buffer = io.BytesIO()
+        new_image.save(img_buffer, format='JPEG', quality=85)
+        img_buffer.seek(0)
+        
+        # Insert with overlay mode
+        page.insert_image(new_rect, stream=img_buffer.getvalue(), overlay=False)
+        
+        print("Used simple overlay method")
+        
+    except Exception as e:
+        print(f"All image replacement methods failed: {e}")
     
     def _adjust_for_cut_marks(self, image, cut_marks):
         """
@@ -396,3 +469,4 @@ class PDFProcessor:
             float: Points
         """
         return mm * 2.834645669  # 1mm = 2.834645669 points
+
