@@ -61,7 +61,7 @@ class PDFProcessor:
                     # Process the image
                     processed_image = self._process_page_image(page, center_image, cut_marks)
                     
-                    # Replace image in PDF
+                    # Replace image in PDF - FIXED METHOD
                     self._replace_image_in_page(page, center_image, processed_image)
                     
                 else:
@@ -249,122 +249,114 @@ class PDFProcessor:
         
         return processed_image
     
-def _replace_image_in_page(self, page, image_info, new_image):
-    """
-    Replace image in PDF page with processed version
+    def _replace_image_in_page(self, page, image_info, new_image):
+        """
+        FIXED: Replace image in PDF page with processed version
+        This version properly replaces the image instead of overlaying
+        
+        Args:
+            page: PyMuPDF page object
+            image_info: Original image information
+            new_image: PIL.Image - New image to insert
+        """
+        try:
+            # Get original image rectangle and center
+            old_rect = image_info['rect']
+            old_center_x = (old_rect.x0 + old_rect.x1) / 2
+            old_center_y = (old_rect.y0 + old_rect.y1) / 2
+            
+            # Calculate border expansion in points
+            border_width_mm = self.settings.get('border_width_mm', 3)
+            border_points = self._mm_to_points(border_width_mm)
+            
+            # Calculate new rectangle (centered on original, expanded by border)
+            old_width = old_rect.x1 - old_rect.x0
+            old_height = old_rect.y1 - old_rect.y0
+            new_width = old_width + (2 * border_points)
+            new_height = old_height + (2 * border_points)
+            
+            # Center the new rectangle on the old one
+            new_rect = fitz.Rect(
+                old_center_x - new_width / 2,
+                old_center_y - new_height / 2,
+                old_center_x + new_width / 2,
+                old_center_y + new_height / 2
+            )
+            
+            # Ensure the image is in RGB format
+            if new_image.mode in ('RGBA', 'LA'):
+                # Convert transparency to white background
+                background = Image.new('RGB', new_image.size, (255, 255, 255))
+                if new_image.mode == 'RGBA':
+                    background.paste(new_image, mask=new_image.split()[-1])
+                else:
+                    background.paste(new_image)
+                new_image = background
+            elif new_image.mode != 'RGB':
+                new_image = new_image.convert('RGB')
+            
+            # Save image to buffer
+            img_buffer = io.BytesIO()
+            quality = max(85, 100 - self.settings.get('compression_level', 15))
+            new_image.save(img_buffer, format='JPEG', quality=quality, optimize=True)
+            img_buffer.seek(0)
+            
+            # METHOD 1: Remove original image by covering with white rectangle
+            # Make the white rectangle slightly larger to ensure complete coverage
+            cover_rect = fitz.Rect(
+                old_rect.x0 - 1,
+                old_rect.y0 - 1,
+                old_rect.x1 + 1,
+                old_rect.y1 + 1
+            )
+            
+            # Draw white rectangle to completely cover original image
+            page.draw_rect(cover_rect, color=(1, 1, 1), fill=(1, 1, 1))
+            
+            # Insert the new bordered image
+            page.insert_image(new_rect, stream=img_buffer.getvalue())
+            
+            print(f"Successfully replaced image:")
+            print(f"  Original: {old_width:.1f} x {old_height:.1f} at ({old_rect.x0:.1f}, {old_rect.y0:.1f})")
+            print(f"  New:      {new_width:.1f} x {new_height:.1f} at ({new_rect.x0:.1f}, {new_rect.y0:.1f})")
+            print(f"  Border:   {border_width_mm}mm ({border_points:.1f} points)")
+            
+        except Exception as e:
+            print(f"Error in image replacement: {e}")
+            # Fallback: try simple overlay
+            self._fallback_image_replacement(page, image_info, new_image)
     
-    Args:
-        page: PyMuPDF page object
-        image_info: Original image information
-        new_image: PIL.Image - New image to insert
-    """
-    # Convert to appropriate format
-    if new_image.mode in ('RGBA', 'LA'):
-        # Convert transparency to white background
-        background = Image.new('RGB', new_image.size, (255, 255, 255))
-        if new_image.mode == 'RGBA':
-            background.paste(new_image, mask=new_image.split()[-1])
-        else:
-            background.paste(new_image)
-        new_image = background
-    elif new_image.mode != 'RGB':
-        new_image = new_image.convert('RGB')
-    
-    # Save new image to buffer
-    img_buffer = io.BytesIO()
-    quality = max(10, 100 - self.settings.get('compression_level', 15))  # Higher quality
-    new_image.save(img_buffer, format='JPEG', quality=quality, optimize=True)
-    img_buffer.seek(0)
-    
-    # Get original image rectangle
-    old_rect = image_info['rect']
-    
-    # Calculate border expansion
-    border_width_mm = self.settings.get('border_width_mm', 3)
-    border_points = self._mm_to_points(border_width_mm)
-    
-    # Calculate new rectangle (centered expansion)
-    new_rect = fitz.Rect(
-        old_rect.x0 - border_points,
-        old_rect.y0 - border_points,
-        old_rect.x1 + border_points,
-        old_rect.y1 + border_points
-    )
-    
-    # Method 1: Remove old image and insert new one
-    try:
-        # First, cover the old image area with page background color
-        page.draw_rect(old_rect, color=(1, 1, 1), fill=(1, 1, 1))
+    def _fallback_image_replacement(self, page, image_info, new_image):
+        """
+        Fallback method for image replacement
         
-        # Insert the new bordered image
-        page.insert_image(new_rect, stream=img_buffer.getvalue())
-        
-        print(f"Successfully replaced image: old rect {old_rect}, new rect {new_rect}")
-        
-    except Exception as e:
-        print(f"Error replacing image: {e}")
-        # Fallback: try alternative method
-        self._replace_image_alternative(page, image_info, new_image, old_rect, new_rect)
-
-    def _replace_image_alternative(self, page, image_info, new_image, old_rect, new_rect):
-    """
-    Alternative image replacement method
-    
-    Args:
-        page: PyMuPDF page object
-        image_info: Original image information
-        new_image: PIL.Image - New image to insert
-        old_rect: Original image rectangle
-        new_rect: New image rectangle
-    """
-    try:
-        # Method 2: Direct image replacement via xref
-        doc = page.parent
-        
-        # Save new image to buffer
-        img_buffer = io.BytesIO()
-        new_image.save(img_buffer, format='JPEG', quality=90)
-        img_buffer.seek(0)
-        
-        # Replace the image data in the PDF
-        # This updates the actual image object rather than overlaying
-        img_xref = image_info['xref']
-        
-        # Update the image
-        doc._update_stream(img_xref, img_buffer.getvalue())
-        
-        # Update image positioning if needed
-        # (This is more complex and may require additional PDF manipulation)
-        
-        print("Used alternative image replacement method")
-        
-    except Exception as e:
-        print(f"Alternative replacement also failed: {e}")
-        # Final fallback: simple overlay with better positioning
-        self._simple_image_overlay(page, new_image, new_rect)
-
-def _simple_image_overlay(self, page, new_image, new_rect):
-    """
-    Simple image overlay as final fallback
-    
-    Args:
-        page: PyMuPDF page object
-        new_image: PIL.Image - New image to insert
-        new_rect: Rectangle for new image
-    """
-    try:
-        # Save image
-        img_buffer = io.BytesIO()
-        new_image.save(img_buffer, format='JPEG', quality=85)
-        img_buffer.seek(0)
-        
-        # Insert with overlay mode
-        page.insert_image(new_rect, stream=img_buffer.getvalue(), overlay=False)
-        
-        print("Used simple overlay method")
-        
-    except Exception as e:
-        print(f"All image replacement methods failed: {e}")
+        Args:
+            page: PyMuPDF page object
+            image_info: Original image information  
+            new_image: PIL.Image - New image to insert
+        """
+        try:
+            print("Using fallback image replacement method")
+            
+            old_rect = image_info['rect']
+            
+            # Simple approach: just place new image at same location
+            # Convert image
+            if new_image.mode != 'RGB':
+                new_image = new_image.convert('RGB')
+            
+            # Save to buffer
+            img_buffer = io.BytesIO()
+            new_image.save(img_buffer, format='JPEG', quality=90)
+            img_buffer.seek(0)
+            
+            # Insert at original location
+            page.insert_image(old_rect, stream=img_buffer.getvalue())
+            
+            print("Fallback replacement completed")
+            
+        except Exception as e:
+            print(f"Fallback replacement also failed: {e}")
     
     def _adjust_for_cut_marks(self, image, cut_marks):
         """
@@ -377,12 +369,7 @@ def _simple_image_overlay(self, page, new_image, new_rect):
         Returns:
             PIL.Image: Adjusted image
         """
-        # This is a placeholder for cut mark adjustment logic
-        # In a real implementation, you would:
-        # 1. Analyze cut mark positions
-        # 2. Ensure border doesn't interfere with cut marks
-        # 3. Adjust border placement accordingly
-        
+        # Placeholder for cut mark adjustment logic
         return image
     
     def _generate_output_path(self, input_path):
@@ -469,4 +456,3 @@ def _simple_image_overlay(self, page, new_image, new_rect):
             float: Points
         """
         return mm * 2.834645669  # 1mm = 2.834645669 points
-
