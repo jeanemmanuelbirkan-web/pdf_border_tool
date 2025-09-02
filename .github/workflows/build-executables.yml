@@ -41,7 +41,7 @@ jobs:
     
     - name: Build Windows executable
       run: |
-        python -m PyInstaller --onefile --windowed --name=PDFBorderTool --hidden-import=PyQt5.sip --hidden-import=PyQt5.QtCore --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.QtGui --collect-all=cv2 main.py
+        python -m PyInstaller --onefile --windowed --name=PDFBorderTool --add-data="gui;gui" --add-data="core;core" --add-data="utils;utils" --hidden-import=PyQt5.sip --hidden-import=PyQt5.QtCore --hidden-import=PyQt5.QtWidgets --hidden-import=PyQt5.QtGui --hidden-import=gui.main_window --hidden-import=gui.preview_dialog --hidden-import=gui.settings_dialog --hidden-import=core.pdf_processor --hidden-import=core.image_processor --hidden-import=core.cut_mark_detector --hidden-import=utils.config --hidden-import=utils.validators --collect-all=cv2 main.py
     
     - name: Verify executable was created
       run: |
