@@ -490,9 +490,15 @@ class MainWindow(QMainWindow):
         print("Settings signals connected for auto-save")
     
     def save_current_settings(self):
-        """Save current UI settings to config (auto-save)"""
+        """Save current UI settings to config (auto-save with throttling)"""
         if self.loading_settings:
             return  # Don't save during initial load
+        
+        # Don't save during processing to avoid blocking
+        if (hasattr(self, 'processing_thread') and 
+            self.processing_thread and 
+            self.processing_thread.isRunning()):
+            return
         
         try:
             # Get current settings from UI
@@ -502,11 +508,12 @@ class MainWindow(QMainWindow):
             for key, value in current_settings.items():
                 self.config.set_setting(key, value)
             
-            # Save to file
+            # Save to file (with error handling in config)
             self.config.save_settings()
-            
-        except Exception as e:
-            print(f"Error saving settings: {e}")
+        
+    except Exception as e:
+        print(f"Warning: Error saving settings: {e}")
+        # Don't show error dialog - just continue
     
     def get_current_settings(self):
         """Get current settings from UI controls"""
@@ -777,3 +784,4 @@ class MainWindow(QMainWindow):
             self.processing_thread.wait()
         
         event.accept()
+
