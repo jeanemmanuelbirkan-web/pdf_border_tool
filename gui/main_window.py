@@ -8,7 +8,7 @@ from pathlib import Path
 from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout, 
                             QWidget, QLabel, QFrame, QPushButton, 
                             QProgressBar, QTextEdit, QGroupBox,
-                            QSpinBox, QComboBox, QCheckBox, QSlider,
+                            QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QSlider,
                             QLineEdit, QFileDialog, QMessageBox,
                             QSplitter, QListWidget, QListWidgetItem)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
@@ -247,6 +247,20 @@ class MainWindow(QMainWindow):
         width_layout.addStretch()
         border_layout.addLayout(width_layout)
         
+        # Source width (NEW)
+        source_layout = QHBoxLayout()
+        source_layout.addWidget(QLabel("Source Width (mm):"))
+        self.source_width = QDoubleSpinBox()
+        self.source_width.setRange(0.5, 5.0)
+        self.source_width.setValue(1.0)
+        self.source_width.setSingleStep(0.1)
+        self.source_width.setDecimals(1)
+        self.source_width.setSuffix(" mm")
+        self.source_width.setToolTip("Width of edge region to stretch from original image")
+        source_layout.addWidget(self.source_width)
+        source_layout.addStretch()
+        border_layout.addLayout(source_layout)
+        
         # Stretch method
         method_layout = QHBoxLayout()
         method_layout.addWidget(QLabel("Stretch Method:"))
@@ -454,6 +468,7 @@ class MainWindow(QMainWindow):
         """Get current settings from UI"""
         return {
             'border_width_mm': self.border_width.value(),
+            'stretch_source_width_mm': self.source_width.value(),
             'stretch_method': self.stretch_method.currentText().lower().replace(' ', '_'),
             'output_dpi': self.dpi_slider.value(),
             'auto_detect_cut_marks': self.auto_detect_cuts.isChecked(),
@@ -467,6 +482,7 @@ class MainWindow(QMainWindow):
         settings = self.config.get_all_settings()
         
         self.border_width.setValue(settings.get('border_width_mm', 3))
+        self.source_width.setValue(settings.get('stretch_source_width_mm', 1.0))
         
         method_text = settings.get('stretch_method', 'edge_repeat').replace('_', ' ').title()
         index = self.stretch_method.findText(method_text)
