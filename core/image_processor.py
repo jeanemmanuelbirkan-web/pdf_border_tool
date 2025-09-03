@@ -3,7 +3,7 @@ Image Processor - Generates border content with configurable source width
 """
 
 import numpy as np
-from PIL import Image, ImageFilter, ImageEnhance
+from PIL import Image, ImageFilter, ImageEnhance, ImageDraw
 import cv2
 
 class ImageProcessor:
@@ -41,6 +41,8 @@ class ImageProcessor:
             result = self._generate_smart_fill_content(original_image, border_pixels)
         elif method == 'gradient_fade':
             result = self._generate_clean_gradient_content(original_image, border_pixels)
+        elif method == 'solid_color':
+            result = self._generate_solid_color_content(original_image, border_pixels)
         else:
             result = self._generate_edge_stretched_content(original_image, border_pixels)
         
@@ -104,7 +106,7 @@ class ImageProcessor:
         
         # STEP 3: Fill edge borders (clean stretching, no gradients)
         
-        # TOP border (100mm x 3mm) - stretch top edge downward
+        # TOP border - stretch top edge downward
         for i in range(border_pixels):
             source_row_idx = min(i * stretch_source_pixels // border_pixels, stretch_source_pixels - 1)
             
@@ -114,7 +116,7 @@ class ImageProcessor:
             # Place in top border (middle section only, excluding corners)
             content_array[border_pixels - 1 - i, border_pixels:border_pixels + orig_width] = source_row
         
-        # BOTTOM border (100mm x 3mm) - stretch bottom edge upward
+        # BOTTOM border - stretch bottom edge upward
         for i in range(border_pixels):
             source_row_idx = min(i * stretch_source_pixels // border_pixels, stretch_source_pixels - 1)
             
@@ -124,7 +126,7 @@ class ImageProcessor:
             # Place in bottom border (middle section only, excluding corners)
             content_array[border_pixels + orig_height + i, border_pixels:border_pixels + orig_width] = source_row
         
-        # LEFT border (100mm x 3mm) - stretch left edge rightward
+        # LEFT border - stretch left edge rightward
         for i in range(border_pixels):
             source_col_idx = min(i * stretch_source_pixels // border_pixels, stretch_source_pixels - 1)
             
@@ -134,7 +136,7 @@ class ImageProcessor:
             # Place in left border (middle section only, excluding corners)
             content_array[border_pixels:border_pixels + orig_height, border_pixels - 1 - i] = source_col
         
-        # RIGHT border (100mm x 3mm) - stretch right edge leftward
+        # RIGHT border - stretch right edge leftward
         for i in range(border_pixels):
             source_col_idx = min(i * stretch_source_pixels // border_pixels, stretch_source_pixels - 1)
             
@@ -156,7 +158,7 @@ class ImageProcessor:
         
         print(f"  ✓ Extracted {corner_source_pixels}x{corner_source_pixels} corner regions")
         
-        # Stretch each corner region to fill 3mm x 3mm corner areas
+        # Stretch each corner region to fill corner areas
         
         # TOP-LEFT corner: stretch configurable×configurable → 3mm×3mm
         tl_stretched = self._stretch_corner_region(tl_corner_region, border_pixels)
@@ -181,6 +183,43 @@ class ImageProcessor:
         
         # Convert back to PIL Image
         result_image = Image.fromarray(content_array)
+        return result_image
+    
+    def _generate_solid_color_content(self, original_image, border_pixels):
+        """
+        Generate content with solid color border
+        
+        Args:
+            original_image (PIL.Image): Original image
+            border_pixels (int): Border width in pixels
+            
+        Returns:
+            PIL.Image: Content with solid color border
+        """
+        orig_width, orig_height = original_image.size
+        
+        # Calculate final dimensions
+        final_width = orig_width + (2 * border_pixels)
+        final_height = orig_height + (2 * border_pixels)
+        
+        print(f"  Original: {orig_width} x {orig_height}")
+        print(f"  Final content: {final_width} x {final_height}")
+        print(f"  Border: {border_pixels} pixels (solid color)")
+        
+        # Get solid color from settings
+        solid_color = self.settings.get('solid_color', '#FFFFFF')
+        
+        # Create new image with solid color background
+        if original_image.mode in ('RGBA', 'LA'):
+            result_image = Image.new('RGBA', (final_width, final_height), solid_color)
+        else:
+            result_image = Image.new('RGB', (final_width, final_height), solid_color)
+        
+        # Paste original image in center
+        result_image.paste(original_image, (border_pixels, border_pixels))
+        
+        print(f"  ✓ Solid color border applied: {solid_color}")
+        
         return result_image
     
     def _stretch_corner_region(self, corner_region, target_size):
