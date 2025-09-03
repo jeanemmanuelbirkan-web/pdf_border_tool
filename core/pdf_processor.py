@@ -12,7 +12,6 @@ import numpy as np
 from datetime import datetime
 
 from core.image_processor import ImageProcessor
-from core.cut_mark_detector import CutMarkDetector
 
 class PDFProcessor:
     """Main PDF processing class - background border approach"""
@@ -20,7 +19,6 @@ class PDFProcessor:
     def __init__(self, settings):
         self.settings = settings
         self.image_processor = ImageProcessor(settings)
-        self.cut_mark_detector = CutMarkDetector(settings)
         
     def process_pdf(self, input_path):
         """
@@ -55,13 +53,10 @@ class PDFProcessor:
                 if center_image:
                     print(f"Processing page {page_num + 1}: Found center image")
                     
-                    # Detect cut marks BEFORE processing
-                    cut_marks = self.cut_mark_detector.detect_cut_marks(page)
-                    
                     # Generate border content from image
                     border_content = self._generate_border_content(page, center_image)
                     
-                    # Add border as BACKGROUND layer (don't touch original or cut marks)
+                    # Add border as BACKGROUND layer (don't touch original)
                     self._add_background_border_layer(page, center_image, border_content)
                     
                 else:
@@ -249,7 +244,7 @@ class PDFProcessor:
     
     def _add_background_border_layer(self, page, image_info, border_content):
         """
-        Add border content as BACKGROUND layer - don't touch original or cut marks
+        Add border content as BACKGROUND layer - don't touch original
         
         Args:
             page: PyMuPDF page object
@@ -288,7 +283,6 @@ class PDFProcessor:
             print(f"  Original image: {original_rect}")
             print(f"  Border content: {border_rect}")
             print(f"  Original stays: UNCHANGED")
-            print(f"  Cut marks stay: UNCHANGED")
             
             # Prepare border content for insertion
             if border_content.mode in ('RGBA', 'LA'):
@@ -302,18 +296,17 @@ class PDFProcessor:
             elif border_content.mode != 'RGB':
                 border_content = border_content.convert('RGB')
             
-            # Save border content to buffer
+            # Save border content to buffer as PNG (lossless)
             img_buffer = io.BytesIO()
-            quality = max(85, 100 - self.settings.get('compression_level', 15))
-            border_content.save(img_buffer, format='JPEG', quality=quality, optimize=True)
+            border_content.save(img_buffer, format='PNG', optimize=True)
             img_buffer.seek(0)
             
             # CRITICAL: Insert border content as BACKGROUND layer
-            # This goes BEHIND original image and cut marks
+            # This goes BEHIND original image
             page.insert_image(border_rect, stream=img_buffer.getvalue(), overlay=False)
             
-            print("✓ Background border layer added successfully")
-            print("✓ Original image and cut marks preserved in exact positions")
+            print("✓ Background border layer added successfully (PNG format)")
+            print("✓ Original image preserved in exact position")
             
         except Exception as e:
             print(f"Error adding background border: {e}")
@@ -344,7 +337,10 @@ class PDFProcessor:
         # Use custom output directory if specified
         if self.settings.get('use_output_directory', False):
             output_dir = self.settings.get('output_directory', input_path.parent)
-            output_path = Path(output_dir) / output_name
+            if output_dir:  # Only use if directory is actually set
+                output_path = Path(output_dir) / output_name
+            else:
+                output_path = input_path.parent / output_name
         else:
             output_path = input_path.parent / output_name
         
@@ -367,22 +363,23 @@ class PDFProcessor:
     
     def _add_processing_metadata(self, pdf_path):
         """
-        Add processing information to PDF metadata
+        Add processing information to PDF metadata (always preserve existing metadata)
         
         Args:
             pdf_path (str): Path to processed PDF
         """
         doc = fitz.open(pdf_path)
         try:
-            # Get existing metadata
+            # Get existing metadata (always preserve)
             metadata = doc.metadata
             
             # Add processing info
             processing_info = f"Processed with PDF Border Tool on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
             processing_info += f" - Added {self.settings.get('border_width_mm', 3)}mm background border"
             
+            # Update metadata while preserving existing
             metadata['subject'] = processing_info
-            metadata['producer'] = 'PDF Border Tool - L\'Oréal'
+            metadata['producer'] = 'PDF Border Tool'
             
             # Set updated metadata
             doc.set_metadata(metadata)
