@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 PDF Border Tool - Main Application Entry Point
-Adds 3mm borders to center images in PDF files while preserving cut marks.
+Adds 3mm borders to center images in PDF files.
 """
 
 import sys
