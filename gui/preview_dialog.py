@@ -2,6 +2,7 @@
 Preview Dialog - Split-view comparison with draggable divider
 """
 
+import os  # 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, 
                             QLabel, QPushButton, QFrame, QSplitter,
                             QScrollArea, QWidget, QApplication)
@@ -180,7 +181,7 @@ class PreviewDialog(QDialog):
         layout = QVBoxLayout(self)
         
         # Title and file info
-        title_label = QLabel(f"📁 {self.file_path.split('/')[-1] if '/' in self.file_path else self.file_path.split('\\')[-1]}")
+        title_label = QLabel(f"📁 {os.path.basename(self.file_path)}") 
         title_label.setAlignment(Qt.AlignCenter)
         title_label.setStyleSheet("font-size: 16px; font-weight: bold; margin: 10px;")
         layout.addWidget(title_label)
@@ -295,3 +296,4 @@ class PreviewDialog(QDialog):
         if self.preview_thread and self.preview_thread.isRunning():
             self.preview_thread.terminate()
         event.accept()
+
