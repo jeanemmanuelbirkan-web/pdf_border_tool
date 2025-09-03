@@ -104,42 +104,120 @@ class PDFProcessor:
             doc.close()
     
     def create_preview(self, pdf_path):
-        """
-        Create preview of processed image
-        
-        Args:
-            pdf_path (str): Path to PDF file
-            
-        Returns:
-            PIL.Image: Preview image with borders
-        """
-        doc = fitz.open(pdf_path)
-        try:
-            page = doc[0]
-            
-            # Find center image
-            center_image = self._find_center_image(page)
-            
-            if center_image:
-                # Get original image
-                original_image = self._extract_image_from_page(page, center_image)
-                
-                # Generate border content
-                border_width_mm = self.settings.get('border_width_mm', 3)
-                dpi = self.settings.get('output_dpi', 300)
-                
-                border_content = self.image_processor.generate_border_content(
-                    original_image, border_width_mm, dpi)
-                
-                return border_content
-            
-            else:
-                # Return original page if no center image
-                return self.extract_first_page_image(pdf_path)
-                
-        finally:
-            doc.close()
+    """
+    Create preview of processed image showing the full page result
     
+    Args:
+        pdf_path (str): Path to PDF file
+        
+    Returns:
+        PIL.Image: Preview image showing full page with borders
+    """
+    doc = fitz.open(pdf_path)
+    try:
+        page = doc[0]
+        
+        # Find center image
+        center_image = self._find_center_image(page)
+        
+        if center_image:
+            # Render original page to image first
+            dpi = self.settings.get('output_dpi', 300)
+            mat = fitz.Matrix(dpi/72, dpi/72)
+            pix = page.get_pixmap(matrix=mat)
+            
+            # Convert to PIL Image
+            img_data = pix.tobytes("ppm")
+            original_page_image = Image.open(io.BytesIO(img_data))
+            
+            # Get original image for border generation
+            original_image = self._extract_image_from_page(page, center_image)
+            
+            # Generate border content
+            border_width_mm = self.settings.get('border_width_mm', 3)
+            border_content = self.image_processor.generate_border_content(
+                original_image, border_width_mm, dpi)
+            
+            # Calculate placement on page
+            original_rect = center_image['rect']
+            page_rect = page.rect
+            
+            # Convert PDF coordinates to image coordinates
+            scale_x = original_page_image.width / page_rect.width
+            scale_y = original_page_image.height / page_rect.height
+            
+            # Calculate border placement in image coordinates
+            border_width_points = self._mm_to_points(border_width_mm)
+            
+            # Original image position in page coordinates
+            orig_center_x = (original_rect.x0 + original_rect.x1) / 2
+            orig_center_y = (original_rect.y0 + original_rect.y1) / 2
+            orig_width = original_rect.x1 - original_rect.x0
+            orig_height = original_rect.y1 - original_rect.y0
+            
+            # Border content dimensions in page coordinates
+            border_width_page = orig_width + (2 * border_width_points)
+            border_height_page = orig_height + (2 * border_width_points)
+            
+            # Convert to image coordinates
+            border_x = int((orig_center_x - border_width_page/2) * scale_x)
+            border_y = int((orig_center_y - border_height_page/2) * scale_y)
+            border_w = int(border_width_page * scale_x)
+            border_h = int(border_height_page * scale_y)
+            
+            # Create result image (copy of original page)
+            result_image = original_page_image.copy()
+            
+            # Resize border content to fit placement area
+            border_content_resized = border_content.resize((border_w, border_h), Image.Resampling.LANCZOS)
+            
+            # Paste border content onto page (as background)
+            # Ensure we don't go outside image bounds
+            paste_x = max(0, border_x)
+            paste_y = max(0, border_y)
+            
+            # Crop border content if necessary
+            if border_x < 0 or border_y < 0 or border_x + border_w > result_image.width or border_y + border_h > result_image.height:
+                crop_left = max(0, -border_x)
+                crop_top = max(0, -border_y)
+                crop_right = min(border_w, result_image.width - border_x) if border_x >= 0 else border_w
+                crop_bottom = min(border_h, result_image.height - border_y) if border_y >= 0 else border_h
+                
+                border_content_resized = border_content_resized.crop((crop_left, crop_top, crop_right, crop_bottom))
+            
+            # Create a temporary image to composite
+            temp_result = Image.new('RGB', result_image.size, (255, 255, 255))
+            temp_result.paste(border_content_resized, (paste_x, paste_y))
+            
+            # Blend with original page (border content as background, original on top)
+            # For areas outside the original image, use border content
+            # For the original image area, use original content
+            
+            # Create mask for original image area
+            mask = Image.new('L', result_image.size, 0)
+            mask_draw = ImageDraw.Draw(mask)
+            
+            # Original image bounds in image coordinates
+            orig_img_x = int(original_rect.x0 * scale_x)
+            orig_img_y = int(original_rect.y0 * scale_y)
+            orig_img_w = int((original_rect.x1 - original_rect.x0) * scale_x)
+            orig_img_h = int((original_rect.y1 - original_rect.y0) * scale_y)
+            
+            # Fill mask for original image area
+            mask_draw.rectangle([orig_img_x, orig_img_y, orig_img_x + orig_img_w, orig_img_y + orig_img_h], fill=255)
+            
+            # Composite: border content as background, original page on top using mask
+            result_image = Image.composite(result_image, temp_result, mask)
+            
+            return result_image
+        
+        else:
+            # Return original page if no center image
+            return self.extract_first_page_image(pdf_path)
+            
+    finally:
+        doc.close()
+        
     def _find_center_image(self, page):
         """
         Find the center image on a PDF page
@@ -399,3 +477,4 @@ class PDFProcessor:
             float: Points
         """
         return mm * 2.834645669  # 1mm = 2.834645669 points
+
