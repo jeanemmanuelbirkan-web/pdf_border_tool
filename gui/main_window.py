@@ -10,12 +10,13 @@ from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout,
                             QProgressBar, QTextEdit, QGroupBox,
                             QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QSlider,
                             QLineEdit, QFileDialog, QMessageBox,
-                            QSplitter, QListWidget, QListWidgetItem, QColorDialog)
+                            QSplitter, QListWidget, QListWidgetItem, QColorDialog, QDialog)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QDragEnterEvent, QDropEvent, QPalette, QColor
 
 from core.pdf_processor import PDFProcessor
 from gui.preview_dialog import PreviewDialog
+from gui.color_picker_dialog import ColorPickerDialog
 from utils.validators import PDFValidator
 
 class DropZone(QFrame):
@@ -468,14 +469,22 @@ class MainWindow(QMainWindow):
             self.color_display.setStyleSheet(f"background-color: {color.name()}; border: 1px solid #999;")
     
     def pick_color_from_image(self):
-        """Pick color from image using eyedropper"""
+        """Pick color from image using a color picker dialog"""
         if self.file_list.count() > 0:
             first_file = self.file_list.item(0).text()
-            # For now, open color dialog - eyedropper will be implemented in preview
-            color = QColorDialog.getColor(self.selected_color, self, "Choose Border Color")
-            if color.isValid():
-                self.selected_color = color
-                self.color_display.setStyleSheet(f"background-color: {color.name()}; border: 1px solid #999;")
+            
+            try:
+                # Create a color picker dialog
+                dialog = ColorPickerDialog(first_file, self.get_current_settings(), self)
+                if dialog.exec_() == QDialog.Accepted:
+                    selected_color = dialog.get_selected_color()
+                    if selected_color:
+                        self.selected_color = selected_color
+                        self.color_display.setStyleSheet(f"background-color: {selected_color.name()}; border: 1px solid #999;")
+            except Exception as e:
+                QMessageBox.warning(self, "Color Picker Error", f"Could not open color picker: {str(e)}")
+                # Fall back to color dialog
+                self.pick_color_from_dialog()
         else:
             QMessageBox.information(self, "No Files", "Please add PDF files first to pick colors from images.")
         
