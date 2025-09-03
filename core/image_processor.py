@@ -1,5 +1,5 @@
 """
-Image Processor - Creates borders by stretching edge pixels around unchanged original image
+Image Processor - Generates border content without modifying original
 """
 
 import numpy as np
@@ -7,22 +7,22 @@ from PIL import Image, ImageFilter, ImageEnhance
 import cv2
 
 class ImageProcessor:
-    """Image processing for border creation - keeps original image unchanged"""
+    """Generates border content from edge pixels"""
     
     def __init__(self, settings):
         self.settings = settings
     
-    def add_border(self, image, border_width_mm, dpi):
+    def generate_border_content(self, original_image, border_width_mm, dpi):
         """
-        Add border around unchanged original image by stretching edge content
+        Generate border content around original image (original stays unchanged in center)
         
         Args:
-            image (PIL.Image): Original image (will remain unchanged)
+            original_image (PIL.Image): Original image (read-only)
             border_width_mm (float): Border width in millimeters
             dpi (int): Dots per inch for calculation
             
         Returns:
-            PIL.Image: Original image + border (larger image)
+            PIL.Image: Border content (original + generated borders)
         """
         # Convert mm to pixels
         border_pixels = self._mm_to_pixels(border_width_mm, dpi)
@@ -30,304 +30,272 @@ class ImageProcessor:
         # Get stretch method from settings
         method = self.settings.get('stretch_method', 'edge_repeat')
         
-        print(f"Creating {border_width_mm}mm border ({border_pixels} pixels) around unchanged original")
-        print(f"Original image size: {image.size}")
+        print(f"Generating border content: {border_width_mm}mm ({border_pixels} pixels)")
+        print(f"Method: {method}")
+        print(f"Original size: {original_image.size}")
         
-        # Apply border creation method
+        # Generate border content using specified method
         if method == 'edge_repeat':
-            result = self._create_stretched_edge_border(image, border_pixels)
+            result = self._generate_edge_stretched_content(original_image, border_pixels)
         elif method == 'smart_fill':
-            result = self._create_smart_border(image, border_pixels)
+            result = self._generate_smart_fill_content(original_image, border_pixels)
         elif method == 'gradient_fade':
-            result = self._create_gradient_border(image, border_pixels)
+            result = self._generate_gradient_content(original_image, border_pixels)
         else:
-            result = self._create_stretched_edge_border(image, border_pixels)
+            result = self._generate_edge_stretched_content(original_image, border_pixels)
         
-        print(f"Final image size: {result.size}")
+        print(f"Generated content size: {result.size}")
         return result
     
-    def _create_stretched_edge_border(self, original_image, border_pixels):
+    def _generate_edge_stretched_content(self, original_image, border_pixels):
         """
-        FIXED: Create border by stretching edge pixels around unchanged original image
+        Generate content: original in center + stretched edge borders
         
         Args:
             original_image (PIL.Image): Original image (unchanged)
             border_pixels (int): Border width in pixels
             
         Returns:
-            PIL.Image: Original image with stretched edge border around it
+            PIL.Image: Complete content (original + borders)
         """
-        # Convert to numpy array
+        # Convert original to array (read-only)
         original_array = np.array(original_image)
         orig_height, orig_width = original_array.shape[:2]
         
-        # Calculate new dimensions (original + border on all sides)
-        new_width = orig_width + (2 * border_pixels)
-        new_height = orig_height + (2 * border_pixels)
+        # Calculate final dimensions
+        final_width = orig_width + (2 * border_pixels)
+        final_height = orig_height + (2 * border_pixels)
         
         print(f"  Original: {orig_width} x {orig_height}")
-        print(f"  With border: {new_width} x {new_height}")
-        print(f"  Border size: {border_pixels} pixels")
+        print(f"  Final content: {final_width} x {final_height}")
         
-        # Create larger canvas
+        # Create final content array
         if len(original_array.shape) == 3:
-            new_array = np.zeros((new_height, new_width, original_array.shape[2]), dtype=original_array.dtype)
+            content_array = np.zeros((final_height, final_width, original_array.shape[2]), dtype=original_array.dtype)
         else:
-            new_array = np.zeros((new_height, new_width), dtype=original_array.dtype)
+            content_array = np.zeros((final_height, final_width), dtype=original_array.dtype)
         
-        # STEP 1: Place original image in center (UNCHANGED)
-        new_array[border_pixels:border_pixels+orig_height, 
-                 border_pixels:border_pixels+orig_width] = original_array
+        # STEP 1: Place original image in center (EXACT copy, no modifications)
+        content_array[border_pixels:border_pixels+orig_height, 
+                     border_pixels:border_pixels+orig_width] = original_array.copy()
         
-        print("  ✓ Original image placed in center (unchanged)")
+        print("  ✓ Original placed in center (pixel-perfect copy)")
         
-        # STEP 2: Calculate source region for stretching (1mm worth)
-        stretch_source_pixels = max(3, border_pixels // 3)
-        stretch_source_pixels = min(stretch_source_pixels, min(orig_width//4, orig_height//4))  # Safety limit
+        # STEP 2: Generate border content from edge pixels
+        # Extract edge strips for stretching (1mm worth of pixels)
+        stretch_source_pixels = max(1, min(border_pixels // 3, orig_width // 10, orig_height // 10))
         
         print(f"  ✓ Using {stretch_source_pixels} pixels from edges for stretching")
         
-        # STEP 3: Fill border areas systematically
+        # Get edge data
+        top_edge = original_array[:stretch_source_pixels, :].copy()
+        bottom_edge = original_array[-stretch_source_pixels:, :].copy()
+        left_edge = original_array[:, :stretch_source_pixels].copy()
+        right_edge = original_array[:, -stretch_source_pixels:].copy()
         
-        # Fill TOP border area
-        for i in range(border_pixels):
-            # Determine which source row to use from original image
-            source_row_idx = min(i * stretch_source_pixels // border_pixels, stretch_source_pixels - 1)
-            source_row_idx = min(source_row_idx, orig_height - 1)  # Safety check
-            
-            # Get the source row from original image
-            source_row = original_array[source_row_idx, :].copy()
-            
-            # Create fading effect
-            fade_factor = max(0.4, 1.0 - (i / border_pixels) * 0.6)
-            if len(original_array.shape) == 3:
-                faded_row = (source_row.astype(np.float32) * fade_factor).astype(original_array.dtype)
-            else:
-                faded_row = (source_row.astype(np.float32) * fade_factor).astype(original_array.dtype)
-            
-            # Extend the row to fill full width (including corner areas)
-            extended_row = np.zeros((new_width,) + source_row.shape[1:], dtype=original_array.dtype)
-            
-            # Fill center part with the faded row
-            extended_row[border_pixels:border_pixels+orig_width] = faded_row
-            
-            # Fill left corner area
-            if len(original_array.shape) == 3:
-                left_pixel = faded_row[0]  # First pixel of the row
-                for j in range(border_pixels):
-                    corner_fade = fade_factor * max(0.3, 1.0 - j / border_pixels)
-                    extended_row[border_pixels-1-j] = (left_pixel.astype(np.float32) * corner_fade).astype(original_array.dtype)
-            else:
-                left_pixel = faded_row[0]
-                for j in range(border_pixels):
-                    corner_fade = fade_factor * max(0.3, 1.0 - j / border_pixels)
-                    extended_row[border_pixels-1-j] = (left_pixel * corner_fade).astype(original_array.dtype)
-            
-            # Fill right corner area  
-            if len(original_array.shape) == 3:
-                right_pixel = faded_row[-1]  # Last pixel of the row
-                for j in range(border_pixels):
-                    corner_fade = fade_factor * max(0.3, 1.0 - j / border_pixels)
-                    extended_row[border_pixels+orig_width+j] = (right_pixel.astype(np.float32) * corner_fade).astype(original_array.dtype)
-            else:
-                right_pixel = faded_row[-1]
-                for j in range(border_pixels):
-                    corner_fade = fade_factor * max(0.3, 1.0 - j / border_pixels)
-                    extended_row[border_pixels+orig_width+j] = (right_pixel * corner_fade).astype(original_array.dtype)
-            
-            # Place the extended row in the top border
-            new_array[border_pixels - 1 - i] = extended_row
+        # STEP 3: Fill border areas with stretched content
         
-        # Fill BOTTOM border area
+        # Top border
         for i in range(border_pixels):
-            source_row_idx = min(i * stretch_source_pixels // border_pixels, stretch_source_pixels - 1)
-            source_row_idx = min(source_row_idx, orig_height - 1)
+            source_idx = min(i * stretch_source_pixels // border_pixels, stretch_source_pixels - 1)
+            fade_factor = max(0.3, 1.0 - (i / border_pixels) * 0.7)
             
-            # Get source row from bottom of original image
-            source_row = original_array[orig_height - 1 - source_row_idx, :].copy()
+            source_row = top_edge[source_idx, :].astype(np.float32)
+            faded_row = (source_row * fade_factor).astype(original_array.dtype)
             
-            fade_factor = max(0.4, 1.0 - (i / border_pixels) * 0.6)
-            if len(original_array.shape) == 3:
-                faded_row = (source_row.astype(np.float32) * fade_factor).astype(original_array.dtype)
-            else:
-                faded_row = (source_row.astype(np.float32) * fade_factor).astype(original_array.dtype)
+            # Fill entire width (including corner extensions)
+            row_start = border_pixels - 1 - i
             
-            # Extend the row to fill full width
-            extended_row = np.zeros((new_width,) + source_row.shape[1:], dtype=original_array.dtype)
-            extended_row[border_pixels:border_pixels+orig_width] = faded_row
+            # Center part
+            content_array[row_start, border_pixels:border_pixels+orig_width] = faded_row
             
-            # Fill corners
+            # Left extension
+            left_pixel = faded_row[0]
+            for j in range(border_pixels):
+                corner_fade = fade_factor * max(0.2, 1.0 - j / border_pixels)
+                if len(original_array.shape) == 3:
+                    content_array[row_start, border_pixels-1-j] = (left_pixel * corner_fade).astype(original_array.dtype)
+                else:
+                    content_array[row_start, border_pixels-1-j] = (left_pixel * corner_fade).astype(original_array.dtype)
+            
+            # Right extension
+            right_pixel = faded_row[-1]
+            for j in range(border_pixels):
+                corner_fade = fade_factor * max(0.2, 1.0 - j / border_pixels)
+                if len(original_array.shape) == 3:
+                    content_array[row_start, border_pixels+orig_width+j] = (right_pixel * corner_fade).astype(original_array.dtype)
+                else:
+                    content_array[row_start, border_pixels+orig_width+j] = (right_pixel * corner_fade).astype(original_array.dtype)
+        
+        # Bottom border
+        for i in range(border_pixels):
+            source_idx = min(i * stretch_source_pixels // border_pixels, stretch_source_pixels - 1)
+            fade_factor = max(0.3, 1.0 - (i / border_pixels) * 0.7)
+            
+            source_row = bottom_edge[-(source_idx + 1), :].astype(np.float32)
+            faded_row = (source_row * fade_factor).astype(original_array.dtype)
+            
+            row_start = border_pixels + orig_height + i
+            
+            # Center part
+            content_array[row_start, border_pixels:border_pixels+orig_width] = faded_row
+            
+            # Corner extensions
             left_pixel = faded_row[0]
             right_pixel = faded_row[-1]
-            
             for j in range(border_pixels):
-                corner_fade = fade_factor * max(0.3, 1.0 - j / border_pixels)
+                corner_fade = fade_factor * max(0.2, 1.0 - j / border_pixels)
                 if len(original_array.shape) == 3:
-                    extended_row[border_pixels-1-j] = (left_pixel.astype(np.float32) * corner_fade).astype(original_array.dtype)
-                    extended_row[border_pixels+orig_width+j] = (right_pixel.astype(np.float32) * corner_fade).astype(original_array.dtype)
+                    content_array[row_start, border_pixels-1-j] = (left_pixel * corner_fade).astype(original_array.dtype)
+                    content_array[row_start, border_pixels+orig_width+j] = (right_pixel * corner_fade).astype(original_array.dtype)
                 else:
-                    extended_row[border_pixels-1-j] = (left_pixel * corner_fade).astype(original_array.dtype)
-                    extended_row[border_pixels+orig_width+j] = (right_pixel * corner_fade).astype(original_array.dtype)
-            
-            # Place in bottom border
-            new_array[border_pixels + orig_height + i] = extended_row
+                    content_array[row_start, border_pixels-1-j] = (left_pixel * corner_fade).astype(original_array.dtype)
+                    content_array[row_start, border_pixels+orig_width+j] = (right_pixel * corner_fade).astype(original_array.dtype)
         
-        # Fill LEFT border area (middle part only, corners already done)
+        # Left border (center part only, corners handled above)
         for i in range(border_pixels):
-            source_col_idx = min(i * stretch_source_pixels // border_pixels, stretch_source_pixels - 1)
-            source_col_idx = min(source_col_idx, orig_width - 1)
+            source_idx = min(i * stretch_source_pixels // border_pixels, stretch_source_pixels - 1)
+            fade_factor = max(0.3, 1.0 - (i / border_pixels) * 0.7)
             
-            # Get source column from left edge of original
-            source_col = original_array[:, source_col_idx].copy()
+            source_col = left_edge[:, source_idx].astype(np.float32)
+            faded_col = (source_col * fade_factor).astype(original_array.dtype)
             
-            fade_factor = max(0.4, 1.0 - (i / border_pixels) * 0.6)
-            if len(original_array.shape) == 3:
-                faded_col = (source_col.astype(np.float32) * fade_factor).astype(original_array.dtype)
-            else:
-                faded_col = (source_col.astype(np.float32) * fade_factor).astype(original_array.dtype)
-            
-            # Place in left border (middle section only, corners already filled)
-            new_array[border_pixels:border_pixels + orig_height, border_pixels - 1 - i] = faded_col
+            content_array[border_pixels:border_pixels+orig_height, border_pixels-1-i] = faded_col
         
-        # Fill RIGHT border area (middle part only, corners already done)
+        # Right border (center part only, corners handled above)
         for i in range(border_pixels):
-            source_col_idx = min(i * stretch_source_pixels // border_pixels, stretch_source_pixels - 1)
-            source_col_idx = min(source_col_idx, orig_width - 1)
+            source_idx = min(i * stretch_source_pixels // border_pixels, stretch_source_pixels - 1)
+            fade_factor = max(0.3, 1.0 - (i / border_pixels) * 0.7)
             
-            # Get source column from right edge of original
-            source_col = original_array[:, orig_width - 1 - source_col_idx].copy()
+            source_col = right_edge[:, -(source_idx + 1)].astype(np.float32)
+            faded_col = (source_col * fade_factor).astype(original_array.dtype)
             
-            fade_factor = max(0.4, 1.0 - (i / border_pixels) * 0.6)
-            if len(original_array.shape) == 3:
-                faded_col = (source_col.astype(np.float32) * fade_factor).astype(original_array.dtype)
-            else:
-                faded_col = (source_col.astype(np.float32) * fade_factor).astype(original_array.dtype)
-            
-            # Place in right border (middle section only)
-            new_array[border_pixels:border_pixels + orig_height, border_pixels + orig_width + i] = faded_col
+            content_array[border_pixels:border_pixels+orig_height, border_pixels+orig_width+i] = faded_col
         
-        print("  ✓ All border areas filled successfully")
+        print("  ✓ Border areas filled with stretched edge content")
         
         # Convert back to PIL Image
-        result_image = Image.fromarray(new_array)
+        result_image = Image.fromarray(content_array)
         return result_image
     
-    def _create_smart_border(self, original_image, border_pixels):
+    def _generate_smart_fill_content(self, original_image, border_pixels):
         """
-        Create border using content-aware fill around unchanged original
+        Generate content using smart fill around original
         
         Args:
             original_image (PIL.Image): Original image
             border_pixels (int): Border width in pixels
             
         Returns:
-            PIL.Image: Image with smart border
+            PIL.Image: Content with smart-filled borders
         """
         try:
-            # Convert to OpenCV format
-            orig_array = np.array(original_image)
-            orig_height, orig_width = orig_array.shape[:2]
-            
-            # Create larger canvas
-            new_width = orig_width + (2 * border_pixels)
-            new_height = orig_height + (2 * border_pixels)
-            
-            if len(orig_array.shape) == 3:
-                extended_img = np.zeros((new_height, new_width, 3), dtype=np.uint8)
-                img_cv = cv2.cvtColor(orig_array, cv2.COLOR_RGB2BGR)
-            else:
-                extended_img = np.zeros((new_height, new_width), dtype=np.uint8)
-                img_cv = orig_array
-            
-            # Place original in center
-            extended_img[border_pixels:border_pixels+orig_height, 
-                        border_pixels:border_pixels+orig_width] = img_cv
-            
-            # Create mask for border areas only
-            mask = np.zeros((new_height, new_width), dtype=np.uint8)
-            mask[:border_pixels, :] = 255  # Top
-            mask[-border_pixels:, :] = 255  # Bottom  
-            mask[:, :border_pixels] = 255  # Left
-            mask[:, -border_pixels:] = 255  # Right
-            
-            # Apply inpainting to border areas only
-            if len(orig_array.shape) == 3:
-                result = cv2.inpaint(extended_img, mask, 
-                                   inpaintRadius=min(border_pixels//2, 10), 
-                                   flags=cv2.INPAINT_TELEA)
-                result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
-            else:
-                result_rgb = cv2.inpaint(extended_img, mask, 
-                                       inpaintRadius=min(border_pixels//2, 10), 
-                                       flags=cv2.INPAINT_TELEA)
-            
-            return Image.fromarray(result_rgb)
-            
+            return self._opencv_smart_fill(original_image, border_pixels)
         except Exception as e:
-            print(f"Smart border failed, falling back to edge stretch: {e}")
-            return self._create_stretched_edge_border(original_image, border_pixels)
+            print(f"Smart fill failed, using edge stretch: {e}")
+            return self._generate_edge_stretched_content(original_image, border_pixels)
     
-    def _create_gradient_border(self, original_image, border_pixels):
-        """
-        Create gradient border around unchanged original
-        
-        Args:
-            original_image (PIL.Image): Original image
-            border_pixels (int): Border width in pixels
-            
-        Returns:
-            PIL.Image: Image with gradient border
-        """
+    def _opencv_smart_fill(self, original_image, border_pixels):
+        """Use OpenCV for smart content-aware border generation"""
         orig_array = np.array(original_image)
         orig_height, orig_width = orig_array.shape[:2]
         
         # Create larger canvas
-        new_width = orig_width + (2 * border_pixels)
-        new_height = orig_height + (2 * border_pixels)
+        final_width = orig_width + (2 * border_pixels)
+        final_height = orig_height + (2 * border_pixels)
         
         if len(orig_array.shape) == 3:
-            new_array = np.zeros((new_height, new_width, orig_array.shape[2]), dtype=orig_array.dtype)
+            extended_img = np.zeros((final_height, final_width, 3), dtype=np.uint8)
+            img_cv = cv2.cvtColor(orig_array, cv2.COLOR_RGB2BGR)
         else:
-            new_array = np.zeros((new_height, new_width), dtype=orig_array.dtype)
+            extended_img = np.zeros((final_height, final_width), dtype=np.uint8)
+            img_cv = orig_array
         
         # Place original in center
-        new_array[border_pixels:border_pixels+orig_height, 
-                 border_pixels:border_pixels+orig_width] = orig_array
+        extended_img[border_pixels:border_pixels+orig_height, 
+                    border_pixels:border_pixels+orig_width] = img_cv
+        
+        # Create mask for border areas
+        mask = np.zeros((final_height, final_width), dtype=np.uint8)
+        mask[:border_pixels, :] = 255  # Top
+        mask[-border_pixels:, :] = 255  # Bottom
+        mask[:, :border_pixels] = 255  # Left
+        mask[:, -border_pixels:] = 255  # Right
+        
+        # Apply inpainting
+        if len(orig_array.shape) == 3:
+            result = cv2.inpaint(extended_img, mask, 
+                               inpaintRadius=min(border_pixels//2, 15), 
+                               flags=cv2.INPAINT_TELEA)
+            result_rgb = cv2.cvtColor(result, cv2.COLOR_BGR2RGB)
+        else:
+            result_rgb = cv2.inpaint(extended_img, mask, 
+                                   inpaintRadius=min(border_pixels//2, 15), 
+                                   flags=cv2.INPAINT_TELEA)
+        
+        return Image.fromarray(result_rgb)
+    
+    def _generate_gradient_content(self, original_image, border_pixels):
+        """
+        Generate content with gradient borders
+        
+        Args:
+            original_image (PIL.Image): Original image
+            border_pixels (int): Border width in pixels
+            
+        Returns:
+            PIL.Image: Content with gradient borders
+        """
+        orig_array = np.array(original_image)
+        orig_height, orig_width = orig_array.shape[:2]
+        
+        # Create final content array
+        final_width = orig_width + (2 * border_pixels)
+        final_height = orig_height + (2 * border_pixels)
+        
+        if len(orig_array.shape) == 3:
+            content_array = np.zeros((final_height, final_width, orig_array.shape[2]), dtype=orig_array.dtype)
+        else:
+            content_array = np.zeros((final_height, final_width), dtype=orig_array.dtype)
+        
+        # Place original in center
+        content_array[border_pixels:border_pixels+orig_height, 
+                     border_pixels:border_pixels+orig_width] = orig_array.copy()
         
         # Create gradient borders
         for i in range(border_pixels):
             gradient_factor = max(0.1, 1.0 - (i / border_pixels))
             
-            # Extract edge colors from original
+            # Get edge colors
             top_color = orig_array[0, :].astype(np.float32)
             bottom_color = orig_array[-1, :].astype(np.float32)
             left_color = orig_array[:, 0].astype(np.float32)
             right_color = orig_array[:, -1].astype(np.float32)
             
             # Apply gradient
-            new_array[border_pixels-1-i, border_pixels:border_pixels+orig_width] = (top_color * gradient_factor).astype(orig_array.dtype)
-            new_array[border_pixels+orig_height+i, border_pixels:border_pixels+orig_width] = (bottom_color * gradient_factor).astype(orig_array.dtype)
-            new_array[border_pixels:border_pixels+orig_height, border_pixels-1-i] = (left_color * gradient_factor).astype(orig_array.dtype)
-            new_array[border_pixels:border_pixels+orig_height, border_pixels+orig_width+i] = (right_color * gradient_factor).astype(orig_array.dtype)
+            content_array[border_pixels-1-i, border_pixels:border_pixels+orig_width] = (top_color * gradient_factor).astype(orig_array.dtype)
+            content_array[border_pixels+orig_height+i, border_pixels:border_pixels+orig_width] = (bottom_color * gradient_factor).astype(orig_array.dtype)
+            content_array[border_pixels:border_pixels+orig_height, border_pixels-1-i] = (left_color * gradient_factor).astype(orig_array.dtype)
+            content_array[border_pixels:border_pixels+orig_height, border_pixels+orig_width+i] = (right_color * gradient_factor).astype(orig_array.dtype)
         
-        # Fill corners with corner pixels
+        # Fill corners
         for i in range(border_pixels):
             for j in range(border_pixels):
                 distance = np.sqrt(i**2 + j**2)
                 fade = max(0.1, 1.0 - (distance / (border_pixels * 1.2)))
                 
-                # Use corner pixels from original
+                # Corner pixels
                 tl_pixel = (orig_array[0, 0].astype(np.float32) * fade).astype(orig_array.dtype)
                 tr_pixel = (orig_array[0, -1].astype(np.float32) * fade).astype(orig_array.dtype)
                 bl_pixel = (orig_array[-1, 0].astype(np.float32) * fade).astype(orig_array.dtype)
                 br_pixel = (orig_array[-1, -1].astype(np.float32) * fade).astype(orig_array.dtype)
                 
-                new_array[border_pixels-1-i, border_pixels-1-j] = tl_pixel
-                new_array[border_pixels-1-i, border_pixels+orig_width+j] = tr_pixel
-                new_array[border_pixels+orig_height+i, border_pixels-1-j] = bl_pixel
-                new_array[border_pixels+orig_height+i, border_pixels+orig_width+j] = br_pixel
+                content_array[border_pixels-1-i, border_pixels-1-j] = tl_pixel
+                content_array[border_pixels-1-i, border_pixels+orig_width+j] = tr_pixel
+                content_array[border_pixels+orig_height+i, border_pixels-1-j] = bl_pixel
+                content_array[border_pixels+orig_height+i, border_pixels+orig_width+j] = br_pixel
         
-        return Image.fromarray(new_array)
+        return Image.fromarray(content_array)
     
     def _mm_to_pixels(self, mm, dpi):
         """
@@ -343,4 +311,3 @@ class ImageProcessor:
         inches = mm / 25.4  # Convert mm to inches
         pixels = int(inches * dpi)
         return max(1, pixels)  # Ensure at least 1 pixel
-
