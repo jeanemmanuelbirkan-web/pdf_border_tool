@@ -10,13 +10,12 @@ from PyQt5.QtWidgets import (QMainWindow, QVBoxLayout, QHBoxLayout,
                             QProgressBar, QTextEdit, QGroupBox,
                             QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox, QSlider,
                             QLineEdit, QFileDialog, QMessageBox,
-                            QSplitter, QListWidget, QListWidgetItem)
+                            QSplitter, QListWidget, QListWidgetItem, QColorDialog)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
-from PyQt5.QtGui import QFont, QDragEnterEvent, QDropEvent, QPalette
+from PyQt5.QtGui import QFont, QDragEnterEvent, QDropEvent, QPalette, QColor
 
 from core.pdf_processor import PDFProcessor
 from gui.preview_dialog import PreviewDialog
-from gui.settings_dialog import SettingsDialog
 from utils.validators import PDFValidator
 
 class DropZone(QFrame):
@@ -148,13 +147,14 @@ class MainWindow(QMainWindow):
         self.config = config
         self.validator = PDFValidator()
         self.processing_thread = None
+        self.selected_color = QColor("#FFFFFF")  # Default white for solid color borders
         
         self.init_ui()
         self.load_settings()
         
     def init_ui(self):
         """Initialize the user interface"""
-        self.setWindowTitle("PDF Border Tool - L'Oréal")
+        self.setWindowTitle("PDF Border Tool")
         self.setGeometry(100, 100, 1000, 700)
         
         # Central widget with splitter
@@ -247,7 +247,7 @@ class MainWindow(QMainWindow):
         width_layout.addStretch()
         border_layout.addLayout(width_layout)
         
-        # Source width (NEW)
+        # Source width
         source_layout = QHBoxLayout()
         source_layout.addWidget(QLabel("Source Width (mm):"))
         self.source_width = QDoubleSpinBox()
@@ -266,10 +266,30 @@ class MainWindow(QMainWindow):
         method_layout.addWidget(QLabel("Stretch Method:"))
         self.stretch_method = QComboBox()
         self.stretch_method.addItems([
-            "Edge Repeat", "Smart Fill", "Gradient Fade"
+            "Edge Repeat", "Smart Fill", "Gradient Fade", "Solid Color"
         ])
+        self.stretch_method.currentTextChanged.connect(self.on_stretch_method_changed)
         method_layout.addWidget(self.stretch_method)
         border_layout.addLayout(method_layout)
+        
+        # Solid color options (initially hidden)
+        self.color_options_widget = QWidget()
+        color_options_layout = QHBoxLayout(self.color_options_widget)
+        color_options_layout.setContentsMargins(0, 0, 0, 0)
+        
+        color_options_layout.addWidget(QLabel("Border Color:"))
+        self.color_display = QPushButton()
+        self.color_display.setFixedSize(30, 25)
+        self.color_display.setStyleSheet(f"background-color: {self.selected_color.name()}; border: 1px solid #999;")
+        color_options_layout.addWidget(self.color_display)
+        
+        self.pick_color_btn = QPushButton("📷 Pick from Image")
+        self.pick_color_btn.clicked.connect(self.pick_color_from_image)
+        color_options_layout.addWidget(self.pick_color_btn)
+        
+        color_options_layout.addStretch()
+        border_layout.addWidget(self.color_options_widget)
+        self.color_options_widget.hide()  # Hidden by default
         
         layout.addWidget(border_group)
         
@@ -291,34 +311,58 @@ class MainWindow(QMainWindow):
         
         layout.addWidget(quality_group)
         
-        # Processing options
-        options_group = QGroupBox("Processing Options")
-        options_layout = QVBoxLayout(options_group)
-        
-        self.auto_detect_cuts = QCheckBox("Auto-detect cut marks")
-        self.auto_detect_cuts.setChecked(True)
-        options_layout.addWidget(self.auto_detect_cuts)
-        
-        self.show_preview = QCheckBox("Show preview before processing")
-        options_layout.addWidget(self.show_preview)
-        
-        self.backup_original = QCheckBox("Backup original files")
-        self.backup_original.setChecked(True)
-        options_layout.addWidget(self.backup_original)
-        
-        layout.addWidget(options_group)
-        
         # Output settings
         output_group = QGroupBox("Output Settings")
         output_layout = QVBoxLayout(output_group)
         
+        # Filename suffix
         suffix_layout = QHBoxLayout()
         suffix_layout.addWidget(QLabel("Filename suffix:"))
         self.filename_suffix = QLineEdit("_bordered")
         suffix_layout.addWidget(self.filename_suffix)
         output_layout.addLayout(suffix_layout)
         
+        # Include timestamp
+        self.include_timestamp = QCheckBox("Include timestamp in filename")
+        output_layout.addWidget(self.include_timestamp)
+        
+        # Custom output directory
+        self.use_custom_output = QCheckBox("Use custom output directory")
+        self.use_custom_output.toggled.connect(self.on_custom_output_toggled)
+        output_layout.addWidget(self.use_custom_output)
+        
+        # Output directory selection
+        self.output_dir_widget = QWidget()
+        output_dir_layout = QHBoxLayout(self.output_dir_widget)
+        output_dir_layout.setContentsMargins(20, 0, 0, 0)
+        
+        output_dir_layout.addWidget(QLabel("Output folder:"))
+        self.output_directory = QLineEdit()
+        self.output_directory.setPlaceholderText("Choose output directory...")
+        output_dir_layout.addWidget(self.output_directory)
+        
+        self.browse_output_btn = QPushButton("📁 Browse...")
+        self.browse_output_btn.clicked.connect(self.browse_output_directory)
+        output_dir_layout.addWidget(self.browse_output_btn)
+        
+        output_layout.addWidget(self.output_dir_widget)
+        self.output_dir_widget.hide()  # Hidden by default
+        
+        # Add processing info to metadata
+        self.add_processing_info = QCheckBox("Add processing info to PDF metadata")
+        output_layout.addWidget(self.add_processing_info)
+        
         layout.addWidget(output_group)
+        
+        # Processing options
+        options_group = QGroupBox("Processing Options")
+        options_layout = QVBoxLayout(options_group)
+        
+        self.backup_original = QCheckBox("Backup original files")
+        self.backup_original.setChecked(True)
+        options_layout.addWidget(self.backup_original)
+        
+        layout.addWidget(options_group)
         
         # Action buttons
         layout.addStretch()
@@ -351,13 +395,44 @@ class MainWindow(QMainWindow):
         """)
         button_layout.addWidget(self.process_btn)
         
-        self.settings_btn = QPushButton("Advanced Settings")
-        self.settings_btn.clicked.connect(self.show_settings)
-        button_layout.addWidget(self.settings_btn)
-        
         layout.addLayout(button_layout)
         
         return panel
+    
+    def on_stretch_method_changed(self, method):
+        """Handle stretch method change"""
+        if method == "Solid Color":
+            self.color_options_widget.show()
+            # Hide source width for solid color
+            self.source_width.setEnabled(False)
+        else:
+            self.color_options_widget.hide()
+            self.source_width.setEnabled(True)
+    
+    def on_custom_output_toggled(self, checked):
+        """Handle custom output directory toggle"""
+        self.output_dir_widget.setVisible(checked)
+    
+    def browse_output_directory(self):
+        """Browse for output directory"""
+        directory = QFileDialog.getExistingDirectory(
+            self, "Select Output Directory", 
+            self.output_directory.text() or os.path.expanduser("~")
+        )
+        if directory:
+            self.output_directory.setText(directory)
+    
+    def pick_color_from_image(self):
+        """Pick color from image using eyedropper"""
+        if self.file_list.count() > 0:
+            first_file = self.file_list.item(0).text()
+            # For now, open color dialog - eyedropper will be implemented in preview
+            color = QColorDialog.getColor(self.selected_color, self, "Choose Border Color")
+            if color.isValid():
+                self.selected_color = color
+                self.color_display.setStyleSheet(f"background-color: {color.name()}; border: 1px solid #999;")
+        else:
+            QMessageBox.information(self, "No Files", "Please add PDF files first to pick colors from images.")
         
     def add_files(self, files):
         """Add files to the processing list"""
@@ -412,7 +487,7 @@ class MainWindow(QMainWindow):
         if self.file_list.count() > 0:
             first_file = self.file_list.item(0).text()
             dialog = PreviewDialog(first_file, self.get_current_settings(), self)
-            dialog.exec_()
+            dialog.show()
             
     def process_files(self):
         """Start processing files"""
@@ -438,79 +513,3 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(value)
         self.progress_label.setText(message)
         self.statusBar().showMessage(message)
-        
-    def file_completed(self, file_path, success, result):
-        """Handle completion of individual file"""
-        file_name = Path(file_path).name
-        if success:
-            print(f"✓ Completed: {file_name}")
-        else:
-            print(f"✗ Failed: {file_name} - {result}")
-            QMessageBox.warning(self, "Processing Error", 
-                              f"Failed to process {file_name}:\n{result}")
-            
-    def processing_finished(self):
-        """Handle completion of all processing"""
-        self.process_btn.setEnabled(True)
-        self.preview_btn.setEnabled(True)
-        self.statusBar().showMessage("Processing completed!")
-        
-        QMessageBox.information(self, "Complete", 
-                              "All files have been processed successfully!")
-        
-    def show_settings(self):
-        """Show advanced settings dialog"""
-        dialog = SettingsDialog(self.config, self)
-        if dialog.exec_() == dialog.Accepted:
-            self.load_settings()
-            
-    def get_current_settings(self):
-        """Get current settings from UI"""
-        return {
-            'border_width_mm': self.border_width.value(),
-            'stretch_source_width_mm': self.source_width.value(),
-            'stretch_method': self.stretch_method.currentText().lower().replace(' ', '_'),
-            'output_dpi': self.dpi_slider.value(),
-            'auto_detect_cut_marks': self.auto_detect_cuts.isChecked(),
-            'show_preview': self.show_preview.isChecked(),
-            'backup_original': self.backup_original.isChecked(),
-            'filename_suffix': self.filename_suffix.text(),
-        }
-        
-    def load_settings(self):
-        """Load settings from config"""
-        settings = self.config.get_all_settings()
-        
-        self.border_width.setValue(settings.get('border_width_mm', 3))
-        self.source_width.setValue(settings.get('stretch_source_width_mm', 1.0))
-        
-        method_text = settings.get('stretch_method', 'edge_repeat').replace('_', ' ').title()
-        index = self.stretch_method.findText(method_text)
-        if index >= 0:
-            self.stretch_method.setCurrentIndex(index)
-            
-        self.dpi_slider.setValue(settings.get('output_dpi', 300))
-        self.auto_detect_cuts.setChecked(settings.get('auto_detect_cut_marks', True))
-        self.show_preview.setChecked(settings.get('show_preview', False))
-        self.backup_original.setChecked(settings.get('backup_original', True))
-        self.filename_suffix.setText(settings.get('filename_suffix', '_bordered'))
-        
-    def closeEvent(self, event):
-        """Handle application close"""
-        if self.processing_thread and self.processing_thread.isRunning():
-            reply = QMessageBox.question(self, 'Close Application',
-                                       'Processing is still running. Are you sure you want to quit?',
-                                       QMessageBox.Yes | QMessageBox.No,
-                                       QMessageBox.No)
-            if reply == QMessageBox.Yes:
-                self.processing_thread.terminate()
-                event.accept()
-            else:
-                event.ignore()
-        else:
-            # Save current settings
-            current_settings = self.get_current_settings()
-            for key, value in current_settings.items():
-                self.config.set_setting(key, value)
-            self.config.save_settings()
-            event.accept()
