@@ -174,7 +174,10 @@ class ImageProcessor:
         br_stretched = self._stretch_corner_region(br_corner_region, border_pixels)
         content_array[border_pixels + orig_height:, border_pixels + orig_width:] = br_stretched
         
-        print(f"  ✓ Corner areas filled with stretched corner regions ({source_width_mm}mm→{border_width_mm}mm)")
+        # Calculate border_width_mm from border_pixels for display
+        dpi = self.settings.get('output_dpi', 300)
+        calculated_border_mm = (border_pixels * 25.4) / dpi
+        print(f"  ✓ Corner areas filled with stretched corner regions ({source_width_mm}mm→{calculated_border_mm:.1f}mm)")
         
         # Convert back to PIL Image
         result_image = Image.fromarray(content_array)
@@ -339,6 +342,11 @@ class ImageProcessor:
         content_array[:border_pixels, border_pixels + orig_width:] = tr_stretched
         content_array[border_pixels + orig_height:, :border_pixels] = bl_stretched
         content_array[border_pixels + orig_height:, border_pixels + orig_width:] = br_stretched
+        
+        # Calculate border_width_mm from border_pixels for display
+        dpi = self.settings.get('output_dpi', 300)
+        calculated_border_mm = (border_pixels * 25.4) / dpi
+        print(f"  ✓ Corner areas filled with stretched corner regions ({source_width_mm}mm→{calculated_border_mm:.1f}mm)")
         
         return Image.fromarray(content_array)
     
