@@ -150,7 +150,6 @@ class MainWindow(QMainWindow):
         self.selected_color = QColor("#FFFFFF")  # Default white for solid color borders
         
         self.init_ui()
-        self.load_settings()
         
     def init_ui(self):
         """Initialize the user interface"""
@@ -513,3 +512,4 @@ class MainWindow(QMainWindow):
         self.progress_bar.setValue(value)
         self.progress_label.setText(message)
         self.statusBar().showMessage(message)
+
