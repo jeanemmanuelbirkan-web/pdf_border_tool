@@ -63,9 +63,6 @@ class PDFValidator:
                     doc.close()
                     return False, "PDF is password protected"
                 
-                # Check PDF version
-                metadata = doc.metadata
-                
                 # Check for corruption
                 if doc.page_count == 0:
                     doc.close()
@@ -316,31 +313,6 @@ class SettingsValidator:
             
         except Exception as e:
             return False, "", f"Invalid directory path: {str(e)}"
-    
-    @staticmethod
-    def validate_memory_limit(memory_mb):
-        """
-        Validate memory limit setting
-        
-        Args:
-            memory_mb: Memory limit in MB
-            
-        Returns:
-            tuple: (is_valid: bool, normalized_value, message: str)
-        """
-        try:
-            memory_int = int(memory_mb)
-            
-            if memory_int < 256:
-                return False, 256, "Memory limit too low (minimum 256MB)"
-            
-            if memory_int > 8192:
-                return False, 8192, "Memory limit too high (maximum 8GB)"
-            
-            return True, memory_int, "Valid memory limit"
-            
-        except ValueError:
-            return False, 1024, "Memory limit must be a number"
 
 class ImageValidator:
     """Image validation utilities"""
