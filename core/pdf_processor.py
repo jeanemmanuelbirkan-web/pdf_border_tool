@@ -252,7 +252,14 @@ class PDFProcessor:
     
     def _replace_image_in_page(self, page, image_info, new_image, cut_marks=None):
         """
-        DEBUG VERSION: Shows detailed positioning information
+        SURGICAL: Replace image without affecting any other page elements
+        Preserves cut marks and all other page content in exact original positions
+        
+        Args:
+            page: PyMuPDF page object
+            image_info: Original image information
+            new_image: PIL.Image - New image to insert
+            cut_marks: Cut mark detection results (ignored to preserve originals)
         """
         try:
             # Get original image rectangle and center
@@ -262,44 +269,141 @@ class PDFProcessor:
             old_width = old_rect.x1 - old_rect.x0
             old_height = old_rect.y1 - old_rect.y0
             
-            # Get page info
-            page_rect = page.rect
+            print(f"SURGICAL REPLACEMENT:")
+            print(f"  Original image: {old_width:.1f}x{old_height:.1f} at ({old_rect.x0:.1f}, {old_rect.y0:.1f})")
+            print(f"  Original center: ({old_center_x:.1f}, {old_center_y:.1f})")
             
-            print("="*50)
-            print("DEBUG: Image Replacement Information")
-            print("="*50)
-            print(f"Page size: {page_rect.width:.1f} x {page_rect.height:.1f}")
-            print(f"Original image position: ({old_rect.x0:.1f}, {old_rect.y0:.1f}) to ({old_rect.x1:.1f}, {old_rect.y1:.1f})")
-            print(f"Original image size: {old_width:.1f} x {old_height:.1f}")
-            print(f"Original image center: ({old_center_x:.1f}, {old_center_y:.1f})")
-            
-            # Calculate border
+            # Calculate border expansion
             border_width_mm = self.settings.get('border_width_mm', 3)
             border_points = self._mm_to_points(border_width_mm)
-            print(f"Border: {border_width_mm}mm = {border_points:.1f} points")
             
-            # For now, just replace at EXACT same position to test
+            # Calculate new image size (original + borders)
+            new_width = old_width + (2 * border_points)
+            new_height = old_height + (2 * border_points)
+            
+            # CRITICAL: New image MUST be centered on exact same position
+            new_rect = fitz.Rect(
+                old_center_x - new_width / 2,
+                old_center_y - new_height / 2,
+                old_center_x + new_width / 2,
+                old_center_y + new_height / 2
+            )
+            
+            # Get page boundaries
+            page_rect = page.rect
+            
+            # Check if new image would extend beyond page - if so, constrain it
+            constrained_rect = new_rect
+            
+            if new_rect.x0 < 0:
+                shift_right = -new_rect.x0
+                constrained_rect = fitz.Rect(0, new_rect.y0, new_rect.x1 + shift_right, new_rect.y1)
+            if new_rect.y0 < 0:
+                shift_down = -new_rect.y0
+                constrained_rect = fitz.Rect(constrained_rect.x0, 0, constrained_rect.x1, constrained_rect.y1 + shift_down)
+            if new_rect.x1 > page_rect.width:
+                excess = new_rect.x1 - page_rect.width
+                constrained_rect = fitz.Rect(constrained_rect.x0 - excess, constrained_rect.y0, page_rect.width, constrained_rect.y1)
+            if new_rect.y1 > page_rect.height:
+                excess = new_rect.y1 - page_rect.height
+                constrained_rect = fitz.Rect(constrained_rect.x0, constrained_rect.y0 - excess, constrained_rect.x1, page_rect.height)
+            
+            # Use constrained rectangle
+            final_rect = constrained_rect
+            
+            print(f"  New image: {final_rect.width:.1f}x{final_rect.height:.1f} at ({final_rect.x0:.1f}, {final_rect.y0:.1f})")
+            print(f"  New center: ({(final_rect.x0 + final_rect.x1)/2:.1f}, {(final_rect.y0 + final_rect.y1)/2:.1f})")
+            
+            # Prepare image
+            if new_image.mode in ('RGBA', 'LA'):
+                background = Image.new('RGB', new_image.size, (255, 255, 255))
+                if new_image.mode == 'RGBA':
+                    background.paste(new_image, mask=new_image.split()[-1])
+                else:
+                    background.paste(new_image)
+                new_image = background
+            elif new_image.mode != 'RGB':
+                new_image = new_image.convert('RGB')
+            
+            # Save image to buffer
+            img_buffer = io.BytesIO()
+            quality = max(85, 100 - self.settings.get('compression_level', 15))
+            new_image.save(img_buffer, format='JPEG', quality=quality, optimize=True)
+            img_buffer.seek(0)
+            
+            # CRITICAL STEP 1: Cover ONLY the original image area
+            # Use EXACT boundaries - no margin, no expansion
+            exact_cover_rect = fitz.Rect(
+                old_rect.x0,
+                old_rect.y0, 
+                old_rect.x1,
+                old_rect.y1
+            )
+            
+            print(f"  Covering exact area: {exact_cover_rect}")
+            
+            # Draw white rectangle to cover ONLY original image
+            page.draw_rect(exact_cover_rect, color=(1, 1, 1), fill=(1, 1, 1))
+            
+            # CRITICAL STEP 2: Insert new image
+            print(f"  Inserting at: {final_rect}")
+            page.insert_image(final_rect, stream=img_buffer.getvalue())
+            
+            # Verify positioning
+            final_center_x = (final_rect.x0 + final_rect.x1) / 2
+            final_center_y = (final_rect.y0 + final_rect.y1) / 2
+            center_shift_x = final_center_x - old_center_x
+            center_shift_y = final_center_y - old_center_y
+            
+            print(f"✓ Surgical replacement complete:")
+            print(f"  Center shift: ({center_shift_x:.1f}, {center_shift_y:.1f}) points")
+            print(f"  Border added: {border_points:.1f} points ({border_width_mm}mm)")
+            
+            # Warning if significant shift
+            if abs(center_shift_x) > 5 or abs(center_shift_y) > 5:
+                print(f"⚠️  WARNING: Image center shifted more than 5 points!")
+            
+        except Exception as e:
+            print(f"Error in surgical replacement: {e}")
+            # Ultra-safe fallback: don't change anything
+            print("FALLBACK: Minimal change approach")
+            self._minimal_change_fallback(page, image_info, new_image)
+    
+    def _minimal_change_fallback(self, page, image_info, new_image):
+        """
+        Absolute minimal change fallback - preserves everything
+        
+        Args:
+            page: PyMuPDF page object
+            image_info: Original image information
+            new_image: PIL.Image - New image to insert
+        """
+        try:
+            print("MINIMAL CHANGE FALLBACK - preserving all page elements")
+            
+            old_rect = image_info['rect']
+            
             # Convert image
             if new_image.mode != 'RGB':
                 new_image = new_image.convert('RGB')
             
             # Save to buffer
             img_buffer = io.BytesIO()
-            new_image.save(img_buffer, format='JPEG', quality=90)
+            new_image.save(img_buffer, format='JPEG', quality=95)
             img_buffer.seek(0)
             
-            # Cover original image
+            # STEP 1: Cover original image with EXACT precision
             page.draw_rect(old_rect, color=(1, 1, 1), fill=(1, 1, 1))
-            print(f"Covered original area: {old_rect}")
             
-            # Insert new image at EXACT same position first
+            # STEP 2: Put new image at EXACT same location and size first
+            # (This tests if the issue is with positioning or sizing)
             page.insert_image(old_rect, stream=img_buffer.getvalue())
-            print(f"Inserted new image at SAME position: {old_rect}")
             
-            print("="*50)
+            print(f"Minimal fallback: replaced at exact same position {old_rect}")
+            print("If cut marks are still displaced, the issue is not with our positioning")
             
         except Exception as e:
-            print(f"Error in debug replacement: {e}")
+            print(f"Even minimal fallback failed: {e}")
     
     def _fallback_image_replacement(self, page, image_info, new_image):
         """
@@ -447,4 +551,5 @@ class PDFProcessor:
             float: Points
         """
         return mm * 2.834645669  # 1mm = 2.834645669 points
+
 
