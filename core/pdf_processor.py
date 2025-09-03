@@ -1,5 +1,5 @@
 """
-PDF Processor - Main engine for PDF manipulation and border addition
+PDF Processor - Adds background border layers without touching original content
 """
 
 import os
@@ -15,7 +15,7 @@ from core.image_processor import ImageProcessor
 from core.cut_mark_detector import CutMarkDetector
 
 class PDFProcessor:
-    """Main PDF processing class"""
+    """Main PDF processing class - background border approach"""
     
     def __init__(self, settings):
         self.settings = settings
@@ -24,7 +24,7 @@ class PDFProcessor:
         
     def process_pdf(self, input_path):
         """
-        Main method to process a PDF file and add borders
+        Main method to process a PDF file and add background borders
         
         Args:
             input_path (str): Path to input PDF file
@@ -32,7 +32,7 @@ class PDFProcessor:
         Returns:
             str: Path to output PDF file
         """
-        print(f"Starting processing: {Path(input_path).name}")
+        print(f"Starting BACKGROUND BORDER processing: {Path(input_path).name}")
         
         # Generate output path
         output_path = self._generate_output_path(input_path)
@@ -58,18 +58,18 @@ class PDFProcessor:
                     # Detect cut marks BEFORE processing
                     cut_marks = self.cut_mark_detector.detect_cut_marks(page)
                     
-                    # Process the image
-                    processed_image = self._process_page_image(page, center_image, cut_marks)
+                    # Generate border content from image
+                    border_content = self._generate_border_content(page, center_image)
                     
-                    # Replace image in PDF with cut mark preservation
-                    self._replace_image_in_page(page, center_image, processed_image, cut_marks)
+                    # Add border as BACKGROUND layer (don't touch original or cut marks)
+                    self._add_background_border_layer(page, center_image, border_content)
                     
                 else:
                     print(f"Page {page_num + 1}: No center image found, skipping")
             
             # Save processed PDF
             doc.save(output_path, garbage=4, deflate=True)
-            print(f"Saved processed PDF: {Path(output_path).name}")
+            print(f"✓ Saved processed PDF: {Path(output_path).name}")
             
             # Add metadata if requested
             if self.settings.get('add_processing_info', False):
@@ -129,14 +129,14 @@ class PDFProcessor:
                 # Get original image
                 original_image = self._extract_image_from_page(page, center_image)
                 
-                # Process with border
+                # Generate border content
                 border_width_mm = self.settings.get('border_width_mm', 3)
                 dpi = self.settings.get('output_dpi', 300)
                 
-                processed_image = self.image_processor.add_border(
+                border_content = self.image_processor.generate_border_content(
                     original_image, border_width_mm, dpi)
                 
-                return processed_image
+                return border_content
             
             else:
                 # Return original page if no center image
@@ -203,7 +203,7 @@ class PDFProcessor:
     
     def _extract_image_from_page(self, page, image_info):
         """
-        Extract image data from PDF page
+        Extract image data from PDF page (for border generation only)
         
         Args:
             page: PyMuPDF page object
@@ -221,251 +221,102 @@ class PDFProcessor:
         
         return image
     
-    def _process_page_image(self, page, image_info, cut_marks):
+    def _generate_border_content(self, page, image_info):
         """
-        Process image with border addition
+        Generate border content from original image (without modifying original)
         
         Args:
             page: PyMuPDF page object
             image_info: Image information dict
-            cut_marks: Cut mark detection results
             
         Returns:
-            PIL.Image: Processed image with border
+            PIL.Image: Border content image
         """
-        # Extract original image
+        # Extract original image (read-only)
         original_image = self._extract_image_from_page(page, image_info)
         
-        # Add border using image processor
+        # Generate border content using image processor
         border_width_mm = self.settings.get('border_width_mm', 3)
         dpi = self.settings.get('output_dpi', 300)
         
-        print(f"Creating border: {border_width_mm}mm at {dpi} DPI")
-        processed_image = self.image_processor.add_border(
+        print(f"Generating border content: {border_width_mm}mm at {dpi} DPI")
+        
+        # Generate border content (original + stretched borders)
+        border_content = self.image_processor.generate_border_content(
             original_image, border_width_mm, dpi)
         
-        # Apply any additional processing based on cut marks
-        if cut_marks and cut_marks.get('detected', False):
-            processed_image = self._adjust_for_cut_marks(processed_image, cut_marks)
-        
-        return processed_image
+        return border_content
     
-    def _replace_image_in_page(self, page, image_info, new_image, cut_marks=None):
+    def _add_background_border_layer(self, page, image_info, border_content):
         """
-        SURGICAL: Replace image without affecting any other page elements
-        Preserves cut marks and all other page content in exact original positions
+        Add border content as BACKGROUND layer - don't touch original or cut marks
         
         Args:
             page: PyMuPDF page object
             image_info: Original image information
-            new_image: PIL.Image - New image to insert
-            cut_marks: Cut mark detection results (ignored to preserve originals)
+            border_content: PIL.Image - Generated border content
         """
         try:
-            # Get original image rectangle and center
-            old_rect = image_info['rect']
-            old_center_x = (old_rect.x0 + old_rect.x1) / 2
-            old_center_y = (old_rect.y0 + old_rect.y1) / 2
-            old_width = old_rect.x1 - old_rect.x0
-            old_height = old_rect.y1 - old_rect.y0
-            
-            print(f"SURGICAL REPLACEMENT:")
-            print(f"  Original image: {old_width:.1f}x{old_height:.1f} at ({old_rect.x0:.1f}, {old_rect.y0:.1f})")
-            print(f"  Original center: ({old_center_x:.1f}, {old_center_y:.1f})")
+            # Get original image rectangle
+            original_rect = image_info['rect']
+            original_center_x = (original_rect.x0 + original_rect.x1) / 2
+            original_center_y = (original_rect.y0 + original_rect.y1) / 2
             
             # Calculate border expansion
             border_width_mm = self.settings.get('border_width_mm', 3)
             border_points = self._mm_to_points(border_width_mm)
             
-            # Calculate new image size (original + borders)
-            new_width = old_width + (2 * border_points)
-            new_height = old_height + (2 * border_points)
+            # Calculate background border rectangle (centered on original)
+            original_width = original_rect.x1 - original_rect.x0
+            original_height = original_rect.y1 - original_rect.y0
+            border_width = original_width + (2 * border_points)
+            border_height = original_height + (2 * border_points)
             
-            # CRITICAL: New image MUST be centered on exact same position
-            new_rect = fitz.Rect(
-                old_center_x - new_width / 2,
-                old_center_y - new_height / 2,
-                old_center_x + new_width / 2,
-                old_center_y + new_height / 2
+            # Center border content on original image position
+            border_rect = fitz.Rect(
+                original_center_x - border_width / 2,
+                original_center_y - border_height / 2,
+                original_center_x + border_width / 2,
+                original_center_y + border_height / 2
             )
             
-            # Get page boundaries
+            # Ensure border doesn't go outside page boundaries
             page_rect = page.rect
+            border_rect = border_rect & page_rect  # Intersection with page
             
-            # Check if new image would extend beyond page - if so, constrain it
-            constrained_rect = new_rect
+            print(f"Background border placement:")
+            print(f"  Original image: {original_rect}")
+            print(f"  Border content: {border_rect}")
+            print(f"  Original stays: UNCHANGED")
+            print(f"  Cut marks stay: UNCHANGED")
             
-            if new_rect.x0 < 0:
-                shift_right = -new_rect.x0
-                constrained_rect = fitz.Rect(0, new_rect.y0, new_rect.x1 + shift_right, new_rect.y1)
-            if new_rect.y0 < 0:
-                shift_down = -new_rect.y0
-                constrained_rect = fitz.Rect(constrained_rect.x0, 0, constrained_rect.x1, constrained_rect.y1 + shift_down)
-            if new_rect.x1 > page_rect.width:
-                excess = new_rect.x1 - page_rect.width
-                constrained_rect = fitz.Rect(constrained_rect.x0 - excess, constrained_rect.y0, page_rect.width, constrained_rect.y1)
-            if new_rect.y1 > page_rect.height:
-                excess = new_rect.y1 - page_rect.height
-                constrained_rect = fitz.Rect(constrained_rect.x0, constrained_rect.y0 - excess, constrained_rect.x1, page_rect.height)
-            
-            # Use constrained rectangle
-            final_rect = constrained_rect
-            
-            print(f"  New image: {final_rect.width:.1f}x{final_rect.height:.1f} at ({final_rect.x0:.1f}, {final_rect.y0:.1f})")
-            print(f"  New center: ({(final_rect.x0 + final_rect.x1)/2:.1f}, {(final_rect.y0 + final_rect.y1)/2:.1f})")
-            
-            # Prepare image
-            if new_image.mode in ('RGBA', 'LA'):
-                background = Image.new('RGB', new_image.size, (255, 255, 255))
-                if new_image.mode == 'RGBA':
-                    background.paste(new_image, mask=new_image.split()[-1])
+            # Prepare border content for insertion
+            if border_content.mode in ('RGBA', 'LA'):
+                # Convert transparency to white background
+                background = Image.new('RGB', border_content.size, (255, 255, 255))
+                if border_content.mode == 'RGBA':
+                    background.paste(border_content, mask=border_content.split()[-1])
                 else:
-                    background.paste(new_image)
-                new_image = background
-            elif new_image.mode != 'RGB':
-                new_image = new_image.convert('RGB')
+                    background.paste(border_content)
+                border_content = background
+            elif border_content.mode != 'RGB':
+                border_content = border_content.convert('RGB')
             
-            # Save image to buffer
+            # Save border content to buffer
             img_buffer = io.BytesIO()
             quality = max(85, 100 - self.settings.get('compression_level', 15))
-            new_image.save(img_buffer, format='JPEG', quality=quality, optimize=True)
+            border_content.save(img_buffer, format='JPEG', quality=quality, optimize=True)
             img_buffer.seek(0)
             
-            # CRITICAL STEP 1: Cover ONLY the original image area
-            # Use EXACT boundaries - no margin, no expansion
-            exact_cover_rect = fitz.Rect(
-                old_rect.x0,
-                old_rect.y0, 
-                old_rect.x1,
-                old_rect.y1
-            )
+            # CRITICAL: Insert border content as BACKGROUND layer
+            # This goes BEHIND original image and cut marks
+            page.insert_image(border_rect, stream=img_buffer.getvalue(), overlay=False)
             
-            print(f"  Covering exact area: {exact_cover_rect}")
-            
-            # Draw white rectangle to cover ONLY original image
-            page.draw_rect(exact_cover_rect, color=(1, 1, 1), fill=(1, 1, 1))
-            
-            # CRITICAL STEP 2: Insert new image
-            print(f"  Inserting at: {final_rect}")
-            page.insert_image(final_rect, stream=img_buffer.getvalue())
-            
-            # Verify positioning
-            final_center_x = (final_rect.x0 + final_rect.x1) / 2
-            final_center_y = (final_rect.y0 + final_rect.y1) / 2
-            center_shift_x = final_center_x - old_center_x
-            center_shift_y = final_center_y - old_center_y
-            
-            print(f"✓ Surgical replacement complete:")
-            print(f"  Center shift: ({center_shift_x:.1f}, {center_shift_y:.1f}) points")
-            print(f"  Border added: {border_points:.1f} points ({border_width_mm}mm)")
-            
-            # Warning if significant shift
-            if abs(center_shift_x) > 5 or abs(center_shift_y) > 5:
-                print(f"⚠️  WARNING: Image center shifted more than 5 points!")
+            print("✓ Background border layer added successfully")
+            print("✓ Original image and cut marks preserved in exact positions")
             
         except Exception as e:
-            print(f"Error in surgical replacement: {e}")
-            # Ultra-safe fallback: don't change anything
-            print("FALLBACK: Minimal change approach")
-            self._minimal_change_fallback(page, image_info, new_image)
-    
-    def _minimal_change_fallback(self, page, image_info, new_image):
-        """
-        Absolute minimal change fallback - preserves everything
-        
-        Args:
-            page: PyMuPDF page object
-            image_info: Original image information
-            new_image: PIL.Image - New image to insert
-        """
-        try:
-            print("MINIMAL CHANGE FALLBACK - preserving all page elements")
-            
-            old_rect = image_info['rect']
-            
-            # Convert image
-            if new_image.mode != 'RGB':
-                new_image = new_image.convert('RGB')
-            
-            # Save to buffer
-            img_buffer = io.BytesIO()
-            new_image.save(img_buffer, format='JPEG', quality=95)
-            img_buffer.seek(0)
-            
-            # STEP 1: Cover original image with EXACT precision
-            page.draw_rect(old_rect, color=(1, 1, 1), fill=(1, 1, 1))
-            
-            # STEP 2: Put new image at EXACT same location and size first
-            # (This tests if the issue is with positioning or sizing)
-            page.insert_image(old_rect, stream=img_buffer.getvalue())
-            
-            print(f"Minimal fallback: replaced at exact same position {old_rect}")
-            print("If cut marks are still displaced, the issue is not with our positioning")
-            
-        except Exception as e:
-            print(f"Even minimal fallback failed: {e}")
-    
-    def _fallback_image_replacement(self, page, image_info, new_image):
-        """
-        Fallback method for image replacement
-        
-        Args:
-            page: PyMuPDF page object
-            image_info: Original image information  
-            new_image: PIL.Image - New image to insert
-        """
-        try:
-            print("Using fallback image replacement method")
-            
-            old_rect = image_info['rect']
-            
-            # Convert image
-            if new_image.mode != 'RGB':
-                new_image = new_image.convert('RGB')
-            
-            # Save to buffer
-            img_buffer = io.BytesIO()
-            new_image.save(img_buffer, format='JPEG', quality=90)
-            img_buffer.seek(0)
-            
-            # Cover original image
-            page.draw_rect(old_rect, color=(1, 1, 1), fill=(1, 1, 1))
-            
-            # Insert at original location with slight expansion
-            border_points = self._mm_to_points(3)
-            expanded_rect = fitz.Rect(
-                old_rect.x0 - border_points/2,
-                old_rect.y0 - border_points/2,
-                old_rect.x1 + border_points/2,
-                old_rect.y1 + border_points/2
-            )
-            
-            page.insert_image(expanded_rect, stream=img_buffer.getvalue())
-            
-            print("Fallback replacement completed")
-            
-        except Exception as e:
-            print(f"Fallback replacement also failed: {e}")
-    
-    def _adjust_for_cut_marks(self, image, cut_marks):
-        """
-        Adjust processed image to preserve cut mark positioning
-        
-        Args:
-            image: PIL.Image - Processed image
-            cut_marks: Cut mark detection results
-            
-        Returns:
-            PIL.Image: Adjusted image
-        """
-        if not cut_marks.get('detected', False):
-            return image
-        
-        print(f"Adjusting image for {len(cut_marks.get('marks', []))} detected cut marks")
-        
-        # For now, return image as-is since positioning is handled in replacement
-        # Future: Could implement image cropping/adjustment if needed
-        return image
+            print(f"Error adding background border: {e}")
     
     def _generate_output_path(self, input_path):
         """
@@ -528,7 +379,7 @@ class PDFProcessor:
             
             # Add processing info
             processing_info = f"Processed with PDF Border Tool on {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-            processing_info += f" - Added {self.settings.get('border_width_mm', 3)}mm border"
+            processing_info += f" - Added {self.settings.get('border_width_mm', 3)}mm background border"
             
             metadata['subject'] = processing_info
             metadata['producer'] = 'PDF Border Tool - L\'Oréal'
@@ -551,5 +402,3 @@ class PDFProcessor:
             float: Points
         """
         return mm * 2.834645669  # 1mm = 2.834645669 points
-
-
