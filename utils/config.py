@@ -47,6 +47,7 @@ class Config:
         return {
             # Border settings
             'border_width_mm': 3.0,
+            'stretch_source_width_mm': 1.0,  # NEW: Configurable source width
             'stretch_method': 'edge_repeat',
             'output_dpi': 300,
             
@@ -268,7 +269,7 @@ class Config:
         Returns:
             str: Section name
         """
-        processing_keys = ['border_width_mm', 'stretch_method', 'output_dpi', 
+        processing_keys = ['border_width_mm', 'stretch_source_width_mm', 'stretch_method', 'output_dpi', 
                           'auto_detect_cut_marks', 'backup_original', 
                           'preserve_metadata', 'compression_level', 
                           'preserve_color_space', 'memory_limit_mb', 'thread_count']
@@ -315,7 +316,7 @@ class Config:
                    'max_file_size_mb', 'max_recent_files']
         
         # Float settings
-        float_keys = ['border_width_mm']
+        float_keys = ['border_width_mm', 'stretch_source_width_mm']
         
         # List settings
         list_keys = ['recent_files', 'splitter_sizes']
