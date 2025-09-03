@@ -252,112 +252,54 @@ class PDFProcessor:
     
     def _replace_image_in_page(self, page, image_info, new_image, cut_marks=None):
         """
-        IMPROVED: Replace image while preserving cut marks
-        
-        Args:
-            page: PyMuPDF page object
-            image_info: Original image information
-            new_image: PIL.Image - New image to insert
-            cut_marks: Cut mark detection results
+        DEBUG VERSION: Shows detailed positioning information
         """
         try:
             # Get original image rectangle and center
             old_rect = image_info['rect']
             old_center_x = (old_rect.x0 + old_rect.x1) / 2
             old_center_y = (old_rect.y0 + old_rect.y1) / 2
-            
-            # Calculate border expansion in points
-            border_width_mm = self.settings.get('border_width_mm', 3)
-            border_points = self._mm_to_points(border_width_mm)
-            
-            # Calculate new rectangle (centered on original, expanded by border)
             old_width = old_rect.x1 - old_rect.x0
             old_height = old_rect.y1 - old_rect.y0
-            new_width = old_width + (2 * border_points)
-            new_height = old_height + (2 * border_points)
             
-            # Center the new rectangle on the old one
-            new_rect = fitz.Rect(
-                old_center_x - new_width / 2,
-                old_center_y - new_height / 2,
-                old_center_x + new_width / 2,
-                old_center_y + new_height / 2
-            )
-            
-            # IMPORTANT: Check if new rectangle would interfere with page edges/cut marks
+            # Get page info
             page_rect = page.rect
-            margin_for_cut_marks = self._mm_to_points(5)  # 5mm margin for cut marks
             
-            # If we have detected cut marks, use their safe zone
-            if cut_marks and cut_marks.get('detected', False):
-                safe_zone = cut_marks.get('safe_zone', {})
-                if safe_zone:
-                    safe_rect = fitz.Rect(
-                        max(new_rect.x0, safe_zone.get('x', margin_for_cut_marks)),
-                        max(new_rect.y0, safe_zone.get('y', margin_for_cut_marks)),
-                        min(new_rect.x1, safe_zone.get('x', 0) + safe_zone.get('width', page_rect.width - 2*margin_for_cut_marks)),
-                        min(new_rect.y1, safe_zone.get('y', 0) + safe_zone.get('height', page_rect.height - 2*margin_for_cut_marks))
-                    )
-                    print(f"Using cut mark safe zone: {safe_zone}")
-                else:
-                    safe_rect = new_rect
-            else:
-                # Ensure new image doesn't go too close to page edges
-                safe_rect = fitz.Rect(
-                    max(new_rect.x0, margin_for_cut_marks),
-                    max(new_rect.y0, margin_for_cut_marks),
-                    min(new_rect.x1, page_rect.width - margin_for_cut_marks),
-                    min(new_rect.y1, page_rect.height - margin_for_cut_marks)
-                )
+            print("="*50)
+            print("DEBUG: Image Replacement Information")
+            print("="*50)
+            print(f"Page size: {page_rect.width:.1f} x {page_rect.height:.1f}")
+            print(f"Original image position: ({old_rect.x0:.1f}, {old_rect.y0:.1f}) to ({old_rect.x1:.1f}, {old_rect.y1:.1f})")
+            print(f"Original image size: {old_width:.1f} x {old_height:.1f}")
+            print(f"Original image center: ({old_center_x:.1f}, {old_center_y:.1f})")
             
-            # If we had to constrain the rectangle, adjust accordingly
-            if safe_rect != new_rect:
-                print(f"Constraining image to preserve cut marks:")
-                print(f"  Original planned: {new_rect}")
-                print(f"  Safe zone:        {safe_rect}")
-                new_rect = safe_rect
+            # Calculate border
+            border_width_mm = self.settings.get('border_width_mm', 3)
+            border_points = self._mm_to_points(border_width_mm)
+            print(f"Border: {border_width_mm}mm = {border_points:.1f} points")
             
-            # Ensure the image is in RGB format
-            if new_image.mode in ('RGBA', 'LA'):
-                background = Image.new('RGB', new_image.size, (255, 255, 255))
-                if new_image.mode == 'RGBA':
-                    background.paste(new_image, mask=new_image.split()[-1])
-                else:
-                    background.paste(new_image)
-                new_image = background
-            elif new_image.mode != 'RGB':
+            # For now, just replace at EXACT same position to test
+            # Convert image
+            if new_image.mode != 'RGB':
                 new_image = new_image.convert('RGB')
             
-            # Save image to buffer
+            # Save to buffer
             img_buffer = io.BytesIO()
-            quality = max(85, 100 - self.settings.get('compression_level', 15))
-            new_image.save(img_buffer, format='JPEG', quality=quality, optimize=True)
+            new_image.save(img_buffer, format='JPEG', quality=90)
             img_buffer.seek(0)
             
-            # METHOD: More precise original image removal
-            # Only cover the exact original image area, not beyond
-            cover_rect = fitz.Rect(
-                old_rect.x0,
-                old_rect.y0,
-                old_rect.x1,
-                old_rect.y1
-            )
+            # Cover original image
+            page.draw_rect(old_rect, color=(1, 1, 1), fill=(1, 1, 1))
+            print(f"Covered original area: {old_rect}")
             
-            # Draw white rectangle to cover ONLY the original image (preserves cut marks)
-            page.draw_rect(cover_rect, color=(1, 1, 1), fill=(1, 1, 1))
+            # Insert new image at EXACT same position first
+            page.insert_image(old_rect, stream=img_buffer.getvalue())
+            print(f"Inserted new image at SAME position: {old_rect}")
             
-            # Insert the new bordered image
-            page.insert_image(new_rect, stream=img_buffer.getvalue())
-            
-            print(f"Image replacement with cut mark preservation:")
-            print(f"  Original: {old_width:.1f} x {old_height:.1f} at ({old_rect.x0:.1f}, {old_rect.y0:.1f})")
-            print(f"  New:      {new_rect.width:.1f} x {new_rect.height:.1f} at ({new_rect.x0:.1f}, {new_rect.y0:.1f})")
-            print(f"  Border:   {border_width_mm}mm ({border_points:.1f} points)")
+            print("="*50)
             
         except Exception as e:
-            print(f"Error in image replacement: {e}")
-            # Fallback: try simple overlay without cut mark detection
-            self._fallback_image_replacement(page, image_info, new_image)
+            print(f"Error in debug replacement: {e}")
     
     def _fallback_image_replacement(self, page, image_info, new_image):
         """
@@ -505,3 +447,4 @@ class PDFProcessor:
             float: Points
         """
         return mm * 2.834645669  # 1mm = 2.834645669 points
+
