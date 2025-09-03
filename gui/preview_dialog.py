@@ -1,12 +1,12 @@
 """
-Preview Dialog - Split-view comparison with draggable divider
+Preview Dialog - Split-view comparison with draggable divider and panning
 """
 
 import os  # 
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, 
                             QLabel, QPushButton, QFrame, QSplitter,
                             QScrollArea, QWidget, QApplication)
-from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QRect, QPoint
 from PyQt5.QtGui import QPixmap, QPainter, QCursor, QPen, QColor
 import io
 
@@ -38,17 +38,26 @@ class PreviewGeneratorThread(QThread):
             self.error_occurred.emit(str(e))
 
 class SplitViewWidget(QFrame):
-    """Split view widget with draggable divider"""
+    """Split view widget with draggable divider and panning support"""
     
     def __init__(self):
         super().__init__()
         self.original_pixmap = None
         self.bordered_pixmap = None
         self.divider_pos = 0.5  # 50% split
-        self.dragging = False
+        self.dragging_divider = False
         self.zoom_factor = 1.0
+        
+        # Panning support
+        self.panning = False
+        self.pan_start_pos = QPoint()
+        self.pan_offset = QPoint(0, 0)
+        
         self.setMinimumSize(600, 400)
         self.setFrameStyle(QFrame.StyledPanel)
+        
+        # Enable mouse tracking for cursor changes
+        self.setMouseTracking(True)
         
     def set_images(self, original_pixmap, bordered_pixmap):
         """Set both images for comparison"""
@@ -57,7 +66,7 @@ class SplitViewWidget(QFrame):
         self.update()
         
     def paintEvent(self, event):
-        """Paint the split view"""
+        """Paint the split view with panning support"""
         super().paintEvent(event)
         
         if not self.original_pixmap or not self.bordered_pixmap:
@@ -78,21 +87,27 @@ class SplitViewWidget(QFrame):
         bordered_scaled = self.bordered_pixmap.scaledToHeight(
             int(available_height * self.zoom_factor), Qt.SmoothTransformation)
         
-        # Center images horizontally
-        orig_x = (rect.width() - original_scaled.width()) // 2
-        border_x = (rect.width() - bordered_scaled.width()) // 2
+        # Calculate base positions (centered, then apply pan offset)
+        orig_base_x = (rect.width() - original_scaled.width()) // 2
+        border_base_x = (rect.width() - bordered_scaled.width()) // 2
+        base_y = (rect.height() - original_scaled.height()) // 2
+        
+        # Apply pan offset
+        orig_x = orig_base_x + self.pan_offset.x()
+        border_x = border_base_x + self.pan_offset.x()
+        y_pos = base_y + self.pan_offset.y()
         
         # Draw original image (left side)
         if divider_x > 0:
             left_rect = QRect(0, 0, divider_x, rect.height())
             painter.setClipRect(left_rect)
-            painter.drawPixmap(orig_x, 0, original_scaled)
+            painter.drawPixmap(orig_x, y_pos, original_scaled)
         
         # Draw bordered image (right side)
         if divider_x < rect.width():
             right_rect = QRect(divider_x, 0, rect.width() - divider_x, rect.height())
             painter.setClipRect(right_rect)
-            painter.drawPixmap(border_x, 0, bordered_scaled)
+            painter.drawPixmap(border_x, y_pos, bordered_scaled)
         
         # Draw divider line
         painter.setClipping(False)
@@ -114,30 +129,59 @@ class SplitViewWidget(QFrame):
             painter.drawText(10, 25, "ORIGINAL")
         if rect.width() - divider_x > 100:
             painter.drawText(divider_x + 10, 25, "WITH BORDER")
+            
+        # Draw zoom and pan info
+        info_text = f"Zoom: {self.zoom_factor:.1f}x • Right-click + drag to pan"
+        painter.setPen(QPen(QColor(100, 100, 100), 1))
+        painter.drawText(10, rect.height() - 10, info_text)
     
     def mousePressEvent(self, event):
-        """Handle mouse press for dragging"""
+        """Handle mouse press for dragging divider or panning"""
         if event.button() == Qt.LeftButton:
-            self.dragging = True
+            # Left click: divider dragging
+            self.dragging_divider = True
             self.update_divider_position(event.x())
+            
+        elif event.button() == Qt.RightButton:
+            # Right click: start panning
+            self.panning = True
+            self.pan_start_pos = event.pos()
+            self.setCursor(QCursor(Qt.ClosedHandCursor))
     
     def mouseMoveEvent(self, event):
-        """Handle mouse move for dragging"""
+        """Handle mouse move for dragging divider or panning"""
         rect = self.rect()
         divider_x = int(rect.width() * self.divider_pos)
         
-        # Change cursor near divider
-        if abs(event.x() - divider_x) < 10:
-            self.setCursor(QCursor(Qt.SizeHorCursor))
-        else:
-            self.setCursor(QCursor(Qt.ArrowCursor))
+        if self.panning:
+            # Handle panning
+            delta = event.pos() - self.pan_start_pos
+            self.pan_offset += delta
+            self.pan_start_pos = event.pos()
+            self.update()
             
-        if self.dragging:
+        elif self.dragging_divider:
+            # Handle divider dragging
             self.update_divider_position(event.x())
+            
+        else:
+            # Update cursor based on position
+            if abs(event.x() - divider_x) < 10:
+                # Near divider
+                self.setCursor(QCursor(Qt.SizeHorCursor))
+            elif event.buttons() == Qt.NoButton:
+                # Not dragging anything
+                self.setCursor(QCursor(Qt.ArrowCursor))
     
     def mouseReleaseEvent(self, event):
         """Handle mouse release"""
-        self.dragging = False
+        if event.button() == Qt.LeftButton:
+            self.dragging_divider = False
+            
+        elif event.button() == Qt.RightButton:
+            self.panning = False
+            
+        # Reset cursor
         self.setCursor(QCursor(Qt.ArrowCursor))
     
     def wheelEvent(self, event):
@@ -145,10 +189,33 @@ class SplitViewWidget(QFrame):
         delta = event.angleDelta().y()
         zoom_in = delta > 0
         
-        if zoom_in and self.zoom_factor < 3.0:
+        # Store mouse position for zoom centering
+        mouse_pos = event.pos()
+        
+        # Calculate zoom factor change
+        old_zoom = self.zoom_factor
+        
+        if zoom_in and self.zoom_factor < 5.0:
             self.zoom_factor *= 1.25
-        elif not zoom_in and self.zoom_factor > 0.25:
+        elif not zoom_in and self.zoom_factor > 0.1:
             self.zoom_factor /= 1.25
+            
+        # Adjust pan offset to zoom towards mouse position
+        if old_zoom != self.zoom_factor:
+            zoom_ratio = self.zoom_factor / old_zoom
+            
+            # Calculate the point we want to keep stationary (under mouse)
+            rect = self.rect()
+            center_x = rect.width() / 2
+            center_y = rect.height() / 2
+            
+            # Offset from center to mouse
+            mouse_offset_x = mouse_pos.x() - center_x
+            mouse_offset_y = mouse_pos.y() - center_y
+            
+            # Adjust pan to keep the same point under the mouse
+            self.pan_offset.setX(int(self.pan_offset.x() * zoom_ratio - mouse_offset_x * (zoom_ratio - 1)))
+            self.pan_offset.setY(int(self.pan_offset.y() * zoom_ratio - mouse_offset_y * (zoom_ratio - 1)))
             
         self.update()
     
@@ -156,9 +223,28 @@ class SplitViewWidget(QFrame):
         """Update divider position based on mouse x coordinate"""
         self.divider_pos = max(0.1, min(0.9, x / self.rect().width()))
         self.update()
+        
+    def reset_view(self):
+        """Reset zoom and pan to default"""
+        self.zoom_factor = 1.0
+        self.pan_offset = QPoint(0, 0)
+        self.update()
+        
+    def fit_to_window(self):
+        """Fit image to window size"""
+        if not self.original_pixmap:
+            return
+            
+        rect = self.rect()
+        image_height = self.original_pixmap.height()
+        
+        # Calculate zoom to fit height
+        self.zoom_factor = rect.height() / image_height
+        self.pan_offset = QPoint(0, 0)
+        self.update()
 
 class PreviewDialog(QDialog):
-    """Dialog for previewing changes with split view"""
+    """Dialog for previewing changes with split view and panning"""
     
     proceed_requested = pyqtSignal()  # Signal for proceeding with processing
     
@@ -176,7 +262,7 @@ class PreviewDialog(QDialog):
         """Initialize the preview dialog UI"""
         self.setWindowTitle("Preview Changes - Split View")
         self.setModal(True)
-        self.resize(900, 700)
+        self.resize(1000, 800)
         
         layout = QVBoxLayout(self)
         
@@ -191,7 +277,9 @@ class PreviewDialog(QDialog):
         layout.addWidget(self.split_view)
         
         # Instructions
-        instructions = QLabel("💡 Drag the divider left/right to compare  •  🔍 Scroll wheel to zoom")
+        instructions = QLabel(
+            "💡 Drag the divider left/right to compare  •  🔍 Scroll wheel to zoom  •  🖱️ Right-click + drag to pan"
+        )
         instructions.setAlignment(Qt.AlignCenter)
         instructions.setStyleSheet("color: #666666; margin: 10px;")
         layout.addWidget(instructions)
@@ -207,7 +295,23 @@ class PreviewDialog(QDialog):
         """)
         layout.addWidget(self.info_label)
         
-        # Buttons
+        # View control buttons
+        view_button_layout = QHBoxLayout()
+        
+        self.reset_view_btn = QPushButton("🔄 Reset View")
+        self.reset_view_btn.clicked.connect(self.split_view.reset_view)
+        self.reset_view_btn.setToolTip("Reset zoom and pan to default")
+        view_button_layout.addWidget(self.reset_view_btn)
+        
+        self.fit_window_btn = QPushButton("📐 Fit to Window")
+        self.fit_window_btn.clicked.connect(self.split_view.fit_to_window)
+        self.fit_window_btn.setToolTip("Fit image to window size")
+        view_button_layout.addWidget(self.fit_window_btn)
+        
+        view_button_layout.addStretch()
+        layout.addLayout(view_button_layout)
+        
+        # Main action buttons
         button_layout = QHBoxLayout()
         
         self.close_btn = QPushButton("Close")
@@ -296,4 +400,17 @@ class PreviewDialog(QDialog):
         if self.preview_thread and self.preview_thread.isRunning():
             self.preview_thread.terminate()
         event.accept()
-
+        
+    def keyPressEvent(self, event):
+        """Handle keyboard shortcuts"""
+        if event.key() == Qt.Key_Escape:
+            self.reject()
+        elif event.key() == Qt.Key_F:
+            self.split_view.fit_to_window()
+        elif event.key() == Qt.Key_R:
+            self.split_view.reset_view()
+        elif event.key() == Qt.Key_Return or event.key() == Qt.Key_Enter:
+            if event.modifiers() == Qt.ControlModifier:
+                self.accept_and_proceed()
+        else:
+            super().keyPressEvent(event)
