@@ -1,5 +1,5 @@
 """
-Main Window - Primary application interface with settings persistence
+Main Window - Primary application interface
 """
 
 import os
@@ -141,7 +141,7 @@ class ProcessingThread(QThread):
         self.all_completed.emit()
 
 class MainWindow(QMainWindow):
-    """Main application window with settings persistence"""
+    """Main application window"""
     
     def __init__(self, config):
         super().__init__()
@@ -150,50 +150,31 @@ class MainWindow(QMainWindow):
         self.processing_thread = None
         self.selected_color = QColor("#FFFFFF")  # Default white for solid color borders
         
-        # Flag to prevent saving during initial load
-        self.loading_settings = True
-        
         self.init_ui()
-        self.load_settings_to_ui()
-        self.connect_settings_signals()
-        
-        # Now allow settings saving
-        self.loading_settings = False
-        
-        print("MainWindow initialized with settings persistence")
         
     def init_ui(self):
         """Initialize the user interface"""
         self.setWindowTitle("PDF Border Tool")
-        
-        # Load window geometry from settings
-        window_x = self.config.get_setting('window_x', 100)
-        window_y = self.config.get_setting('window_y', 100)
-        window_width = self.config.get_setting('window_width', 1000)
-        window_height = self.config.get_setting('window_height', 700)
-        
-        self.setGeometry(window_x, window_y, window_width, window_height)
+        self.setGeometry(100, 100, 1000, 700)
         
         # Central widget with splitter
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         
         main_layout = QHBoxLayout(central_widget)
-        self.splitter = QSplitter(Qt.Horizontal)
+        splitter = QSplitter(Qt.Horizontal)
         
         # Left panel - Drop zone and file list
         left_panel = self.create_left_panel()
-        self.splitter.addWidget(left_panel)
+        splitter.addWidget(left_panel)
         
         # Right panel - Settings and controls
         right_panel = self.create_right_panel()
-        self.splitter.addWidget(right_panel)
+        splitter.addWidget(right_panel)
         
-        # Load splitter sizes from settings
-        splitter_sizes = self.config.get_setting('splitter_sizes', [600, 400])
-        self.splitter.setSizes(splitter_sizes)
-        
-        main_layout.addWidget(self.splitter)
+        # Set splitter proportions
+        splitter.setSizes([600, 400])
+        main_layout.addWidget(splitter)
         
         # Status bar
         self.statusBar().showMessage("Ready - Drag PDF files to begin")
@@ -260,7 +241,7 @@ class MainWindow(QMainWindow):
         width_layout.addWidget(QLabel("Border Width (mm):"))
         self.border_width = QSpinBox()
         self.border_width.setRange(1, 10)
-        self.border_width.setValue(3)  # Will be overridden by load_settings_to_ui
+        self.border_width.setValue(3)
         self.border_width.setSuffix(" mm")
         width_layout.addWidget(self.border_width)
         width_layout.addStretch()
@@ -271,7 +252,7 @@ class MainWindow(QMainWindow):
         source_layout.addWidget(QLabel("Source Width (mm):"))
         self.source_width = QDoubleSpinBox()
         self.source_width.setRange(0.5, 5.0)
-        self.source_width.setValue(1.0)  # Will be overridden by load_settings_to_ui
+        self.source_width.setValue(1.0)
         self.source_width.setSingleStep(0.1)
         self.source_width.setDecimals(1)
         self.source_width.setSuffix(" mm")
@@ -322,7 +303,7 @@ class MainWindow(QMainWindow):
         dpi_layout.addWidget(QLabel("Output DPI:"))
         self.dpi_slider = QSlider(Qt.Horizontal)
         self.dpi_slider.setRange(72, 300)
-        self.dpi_slider.setValue(300)  # Will be overridden by load_settings_to_ui
+        self.dpi_slider.setValue(300)
         self.dpi_slider.valueChanged.connect(self.update_dpi_label)
         self.dpi_label = QLabel("300 DPI")
         dpi_layout.addWidget(self.dpi_slider)
@@ -338,7 +319,7 @@ class MainWindow(QMainWindow):
         # Filename suffix
         suffix_layout = QHBoxLayout()
         suffix_layout.addWidget(QLabel("Filename suffix:"))
-        self.filename_suffix = QLineEdit("_bordered")  # Will be overridden by load_settings_to_ui
+        self.filename_suffix = QLineEdit("_bordered")
         suffix_layout.addWidget(self.filename_suffix)
         output_layout.addLayout(suffix_layout)
         
@@ -379,7 +360,7 @@ class MainWindow(QMainWindow):
         options_layout = QVBoxLayout(options_group)
         
         self.backup_original = QCheckBox("Backup original files")
-        self.backup_original.setChecked(True)  # Will be overridden by load_settings_to_ui
+        self.backup_original.setChecked(True)
         options_layout.addWidget(self.backup_original)
         
         layout.addWidget(options_group)
@@ -419,102 +400,6 @@ class MainWindow(QMainWindow):
         
         return panel
     
-    def load_settings_to_ui(self):
-        """Load settings from config to UI controls"""
-        print("Loading settings to UI...")
-        
-        # Border settings
-        self.border_width.setValue(int(self.config.get_setting('border_width_mm', 3)))
-        self.source_width.setValue(self.config.get_setting('stretch_source_width_mm', 1.0))
-        
-        # Stretch method
-        stretch_method = self.config.get_setting('stretch_method', 'edge_repeat')
-        method_map = {
-            'edge_repeat': "Edge Repeat",
-            'smart_fill': "Smart Fill", 
-            'gradient_fade': "Gradient Fade",
-            'solid_color': "Solid Color"
-        }
-        ui_method = method_map.get(stretch_method, "Edge Repeat")
-        index = self.stretch_method.findText(ui_method)
-        if index >= 0:
-            self.stretch_method.setCurrentIndex(index)
-        
-        # Quality settings
-        self.dpi_slider.setValue(self.config.get_setting('output_dpi', 300))
-        self.update_dpi_label(self.dpi_slider.value())
-        
-        # Output settings
-        self.filename_suffix.setText(self.config.get_setting('filename_suffix', '_bordered'))
-        self.include_timestamp.setChecked(self.config.get_setting('include_timestamp', False))
-        self.use_custom_output.setChecked(self.config.get_setting('use_output_directory', False))
-        self.output_directory.setText(self.config.get_setting('output_directory', ''))
-        self.add_processing_info.setChecked(self.config.get_setting('add_processing_info', False))
-        
-        # Processing options
-        self.backup_original.setChecked(self.config.get_setting('backup_original', True))
-        
-        # Solid color settings
-        solid_color = self.config.get_setting('solid_color', '#FFFFFF')
-        self.selected_color = QColor(solid_color)
-        self.color_display.setStyleSheet(f"background-color: {solid_color}; border: 1px solid #999;")
-        
-        # Trigger method change to show/hide color options
-        self.on_stretch_method_changed(self.stretch_method.currentText())
-        
-        # Show/hide output directory widget
-        self.on_custom_output_toggled(self.use_custom_output.isChecked())
-        
-        print("Settings loaded to UI successfully")
-    
-    def connect_settings_signals(self):
-        """Connect UI controls to auto-save settings"""
-        # Border settings
-        self.border_width.valueChanged.connect(self.save_current_settings)
-        self.source_width.valueChanged.connect(self.save_current_settings)
-        self.stretch_method.currentTextChanged.connect(self.save_current_settings)
-        
-        # Quality settings
-        self.dpi_slider.valueChanged.connect(self.save_current_settings)
-        
-        # Output settings
-        self.filename_suffix.textChanged.connect(self.save_current_settings)
-        self.include_timestamp.toggled.connect(self.save_current_settings)
-        self.use_custom_output.toggled.connect(self.save_current_settings)
-        self.output_directory.textChanged.connect(self.save_current_settings)
-        self.add_processing_info.toggled.connect(self.save_current_settings)
-        
-        # Processing options
-        self.backup_original.toggled.connect(self.save_current_settings)
-        
-        print("Settings signals connected for auto-save")
-    
-    def save_current_settings(self):
-        """Save current UI settings to config (auto-save with throttling)"""
-        if self.loading_settings:
-            return  # Don't save during initial load
-        
-        # Don't save during processing to avoid blocking
-        if (hasattr(self, 'processing_thread') and 
-            self.processing_thread and 
-            self.processing_thread.isRunning()):
-            return
-        
-        try:
-            # Get current settings from UI
-            current_settings = self.get_current_settings()
-            
-            # Save each setting
-            for key, value in current_settings.items():
-                self.config.set_setting(key, value)
-            
-            # Save to file (with error handling in config)
-            self.config.save_settings()
-        
-    except Exception as e:
-        print(f"Warning: Error saving settings: {e}")
-        # Don't show error dialog - just continue
-    
     def get_current_settings(self):
         """Get current settings from UI controls"""
         settings = {}
@@ -548,7 +433,8 @@ class MainWindow(QMainWindow):
         settings['preserve_metadata'] = True  # Default
         
         # Solid color settings
-        settings['solid_color'] = self.selected_color.name()
+        if settings['stretch_method'] == 'solid_color':
+            settings['solid_color'] = self.selected_color.name()
         
         return settings
     
@@ -561,9 +447,6 @@ class MainWindow(QMainWindow):
         else:
             self.color_options_widget.hide()
             self.source_width.setEnabled(True)
-        
-        # Save settings when method changes
-        self.save_current_settings()
     
     def on_custom_output_toggled(self, checked):
         """Handle custom output directory toggle"""
@@ -584,7 +467,6 @@ class MainWindow(QMainWindow):
         if color.isValid():
             self.selected_color = color
             self.color_display.setStyleSheet(f"background-color: {color.name()}; border: 1px solid #999;")
-            self.save_current_settings()  # Save the new color
     
     def pick_color_from_image(self):
         """Pick color from image using a color picker dialog"""
@@ -599,7 +481,6 @@ class MainWindow(QMainWindow):
                     if selected_color:
                         self.selected_color = selected_color
                         self.color_display.setStyleSheet(f"background-color: {selected_color.name()}; border: 1px solid #999;")
-                        self.save_current_settings()  # Save the picked color
             except Exception as e:
                 QMessageBox.warning(self, "Color Picker Error", f"Could not open color picker: {str(e)}")
                 # Fall back to color dialog
@@ -623,9 +504,6 @@ class MainWindow(QMainWindow):
                     item = QListWidgetItem(file_path)
                     self.file_list.addItem(item)
                     added_count += 1
-                    
-                    # Add to recent files
-                    self.config.add_recent_file(file_path)
             else:
                 QMessageBox.warning(self, "Invalid File", 
                                   f"Cannot add {Path(file_path).name}:\n{message}")
@@ -756,32 +634,3 @@ class MainWindow(QMainWindow):
         """Reset progress bar and label"""
         self.progress_bar.setValue(0)
         self.progress_label.setText("Ready")
-    
-    def closeEvent(self, event):
-        """Handle application close - save settings"""
-        try:
-            # Save window geometry
-            geometry = self.geometry()
-            self.config.set_setting('window_x', geometry.x())
-            self.config.set_setting('window_y', geometry.y())
-            self.config.set_setting('window_width', geometry.width())
-            self.config.set_setting('window_height', geometry.height())
-            
-            # Save splitter sizes
-            self.config.set_setting('splitter_sizes', self.splitter.sizes())
-            
-            # Save final settings
-            self.save_current_settings()
-            
-            print("Settings saved on close")
-            
-        except Exception as e:
-            print(f"Error saving settings on close: {e}")
-        
-        # Close processing thread if running
-        if self.processing_thread and self.processing_thread.isRunning():
-            self.processing_thread.terminate()
-            self.processing_thread.wait()
-        
-        event.accept()
-
