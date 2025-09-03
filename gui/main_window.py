@@ -113,11 +113,11 @@ class ProcessingThread(QThread):
     file_completed = pyqtSignal(str, bool, str)
     all_completed = pyqtSignal()
     
-    def __init__(self, files, config):
+    def __init__(self, files, settings_dict):
         super().__init__()
         self.files = files
-        self.config = config
-        self.processor = PDFProcessor(config)
+        self.settings_dict = settings_dict  # Store as dict
+        self.processor = PDFProcessor(settings_dict)  # Pass dict directly
         
     def run(self):
         """Process files in background"""
@@ -280,6 +280,7 @@ class MainWindow(QMainWindow):
         self.color_display = QPushButton()
         self.color_display.setFixedSize(30, 25)
         self.color_display.setStyleSheet(f"background-color: {self.selected_color.name()}; border: 1px solid #999;")
+        self.color_display.clicked.connect(self.pick_color_from_dialog)
         color_options_layout.addWidget(self.color_display)
         
         self.pick_color_btn = QPushButton("📷 Pick from Image")
@@ -398,6 +399,44 @@ class MainWindow(QMainWindow):
         
         return panel
     
+    def get_current_settings(self):
+        """Get current settings from UI controls"""
+        settings = {}
+        
+        # Border settings
+        settings['border_width_mm'] = float(self.border_width.value())
+        settings['stretch_source_width_mm'] = float(self.source_width.value())
+        
+        # Convert UI stretch method to internal format
+        method_map = {
+            "Edge Repeat": "edge_repeat",
+            "Smart Fill": "smart_fill", 
+            "Gradient Fade": "gradient_fade",
+            "Solid Color": "solid_color"
+        }
+        settings['stretch_method'] = method_map.get(self.stretch_method.currentText(), "edge_repeat")
+        
+        # Quality settings
+        settings['output_dpi'] = self.dpi_slider.value()
+        
+        # Output settings
+        settings['filename_suffix'] = self.filename_suffix.text()
+        settings['include_timestamp'] = self.include_timestamp.isChecked()
+        settings['use_output_directory'] = self.use_custom_output.isChecked()
+        settings['output_directory'] = self.output_directory.text()
+        settings['add_processing_info'] = self.add_processing_info.isChecked()
+        
+        # Processing options
+        settings['backup_original'] = self.backup_original.isChecked()
+        settings['auto_detect_cut_marks'] = True  # Default
+        settings['preserve_metadata'] = True  # Default
+        
+        # Solid color settings
+        if settings['stretch_method'] == 'solid_color':
+            settings['solid_color'] = self.selected_color.name()
+        
+        return settings
+    
     def on_stretch_method_changed(self, method):
         """Handle stretch method change"""
         if method == "Solid Color":
@@ -420,6 +459,13 @@ class MainWindow(QMainWindow):
         )
         if directory:
             self.output_directory.setText(directory)
+    
+    def pick_color_from_dialog(self):
+        """Pick color using color dialog"""
+        color = QColorDialog.getColor(self.selected_color, self, "Choose Border Color")
+        if color.isValid():
+            self.selected_color = color
+            self.color_display.setStyleSheet(f"background-color: {color.name()}; border: 1px solid #999;")
     
     def pick_color_from_image(self):
         """Pick color from image using eyedropper"""
@@ -487,21 +533,53 @@ class MainWindow(QMainWindow):
             first_file = self.file_list.item(0).text()
             dialog = PreviewDialog(first_file, self.get_current_settings(), self)
             dialog.show()
+    
+    def _validate_settings(self, settings):
+        """Validate settings before processing"""
+        # Check output directory if custom is selected
+        if settings.get('use_output_directory', False):
+            output_dir = settings.get('output_directory', '')
+            if not output_dir:
+                QMessageBox.warning(self, "Invalid Settings", 
+                                  "Please select an output directory or disable custom output directory.")
+                return False
+            
+            # Try to create directory if it doesn't exist
+            try:
+                Path(output_dir).mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                QMessageBox.warning(self, "Invalid Output Directory", 
+                                  f"Cannot create output directory:\n{str(e)}")
+                return False
+        
+        return True
             
     def process_files(self):
         """Start processing files"""
         if self.file_list.count() == 0:
+            QMessageBox.warning(self, "No Files", "Please add PDF files to process.")
             return
             
         files = [self.file_list.item(i).text() 
                 for i in range(self.file_list.count())]
         
+        # Get current settings
+        current_settings = self.get_current_settings()
+        
+        # Validate settings
+        if not self._validate_settings(current_settings):
+            return
+        
         # Disable controls during processing
         self.process_btn.setEnabled(False)
         self.preview_btn.setEnabled(False)
         
+        # Reset progress
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("Starting processing...")
+        
         # Start processing thread
-        self.processing_thread = ProcessingThread(files, self.get_current_settings())
+        self.processing_thread = ProcessingThread(files, current_settings)
         self.processing_thread.progress_updated.connect(self.update_progress)
         self.processing_thread.file_completed.connect(self.file_completed)
         self.processing_thread.all_completed.connect(self.processing_finished)
@@ -513,3 +591,37 @@ class MainWindow(QMainWindow):
         self.progress_label.setText(message)
         self.statusBar().showMessage(message)
 
+    def file_completed(self, file_path, success, result):
+        """Handle completion of a single file"""
+        if success:
+            self.statusBar().showMessage(f"✓ Completed: {Path(file_path).name}")
+            print(f"Successfully processed: {file_path} → {result}")
+        else:
+            self.statusBar().showMessage(f"✗ Failed: {Path(file_path).name}")
+            print(f"Error processing {file_path}: {result}")
+            
+            # Show error dialog for failed files
+            QMessageBox.warning(self, "Processing Error", 
+                              f"Failed to process {Path(file_path).name}:\n{result}")
+
+    def processing_finished(self):
+        """Handle completion of all files"""
+        self.progress_bar.setValue(100)
+        self.progress_label.setText("All files completed!")
+        self.statusBar().showMessage("Processing finished!")
+        
+        # Re-enable controls
+        self.process_btn.setEnabled(True)
+        self.preview_btn.setEnabled(True)
+        
+        # Show completion message
+        QMessageBox.information(self, "Processing Complete", 
+                              "All files have been processed successfully!")
+        
+        # Reset progress after a delay
+        QTimer.singleShot(3000, self.reset_progress)
+
+    def reset_progress(self):
+        """Reset progress bar and label"""
+        self.progress_bar.setValue(0)
+        self.progress_label.setText("Ready")
