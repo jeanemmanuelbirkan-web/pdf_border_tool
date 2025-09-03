@@ -1,5 +1,5 @@
 """
-Image Processor - Generates border content with proper corner stretching
+Image Processor - Generates border content with configurable source width
 """
 
 import numpy as np
@@ -7,7 +7,7 @@ from PIL import Image, ImageFilter, ImageEnhance
 import cv2
 
 class ImageProcessor:
-    """Generates border content from edge pixels with corner stretching"""
+    """Generates border content from edge pixels with configurable source width"""
     
     def __init__(self, settings):
         self.settings = settings
@@ -49,14 +49,14 @@ class ImageProcessor:
     
     def _generate_edge_stretched_content(self, original_image, border_pixels):
         """
-        Generate content: original in center + stretched edges + stretched corners (1mm→3mm)
+        Generate content: original in center + stretched edges + stretched corners (configurable source)
         
         Args:
             original_image (PIL.Image): Original image (unchanged)
             border_pixels (int): Border width in pixels
             
         Returns:
-            PIL.Image: Complete content with proper corner stretching
+            PIL.Image: Complete content with configurable source stretching
         """
         # Convert original to array (read-only)
         original_array = np.array(original_image)
@@ -82,12 +82,23 @@ class ImageProcessor:
         
         print("  ✓ Original placed in center (pixel-perfect copy)")
         
-        # STEP 2: Calculate source regions
-        # For 3mm border, use 1mm from original edges as source
-        stretch_source_pixels = max(1, min(border_pixels // 3, orig_width // 10, orig_height // 10))
-        corner_source_pixels = stretch_source_pixels  # 1mm x 1mm corner areas
+        # STEP 2: Calculate source regions using CONFIGURABLE source width
+        # Get configurable source width from settings
+        source_width_mm = self.settings.get('stretch_source_width_mm', 1.0)
+        dpi = self.settings.get('output_dpi', 300)
         
-        print(f"  ✓ Edge source: {stretch_source_pixels} pixels")
+        # Convert source width to pixels
+        source_width_pixels = self._mm_to_pixels(source_width_mm, dpi)
+        
+        # Ensure source width doesn't exceed image dimensions or border size
+        max_source_pixels = min(orig_width // 4, orig_height // 4, border_pixels)
+        stretch_source_pixels = min(source_width_pixels, max_source_pixels)
+        stretch_source_pixels = max(1, stretch_source_pixels)  # Minimum 1 pixel
+        
+        corner_source_pixels = stretch_source_pixels  # Same for corners
+        
+        print(f"  ✓ Configurable source width: {source_width_mm}mm ({source_width_pixels} pixels)")
+        print(f"  ✓ Actual source used: {stretch_source_pixels} pixels")
         print(f"  ✓ Corner source: {corner_source_pixels} x {corner_source_pixels} pixels")
         print("  ✓ NO fading - full color preservation")
         
@@ -135,9 +146,9 @@ class ImageProcessor:
         
         print("  ✓ Edge borders filled with clean stretching (no fading)")
         
-        # STEP 4: Fill corner areas with STRETCHED CORNER REGIONS (1mm → 3mm)
+        # STEP 4: Fill corner areas with STRETCHED CORNER REGIONS (configurable → 3mm)
         
-        # Extract 1mm x 1mm corner regions from original
+        # Extract configurable x configurable corner regions from original
         tl_corner_region = original_array[:corner_source_pixels, :corner_source_pixels].copy()
         tr_corner_region = original_array[:corner_source_pixels, -corner_source_pixels:].copy()
         bl_corner_region = original_array[-corner_source_pixels:, :corner_source_pixels].copy()
@@ -147,23 +158,23 @@ class ImageProcessor:
         
         # Stretch each corner region to fill 3mm x 3mm corner areas
         
-        # TOP-LEFT corner: stretch 1mm×1mm → 3mm×3mm
+        # TOP-LEFT corner: stretch configurable×configurable → 3mm×3mm
         tl_stretched = self._stretch_corner_region(tl_corner_region, border_pixels)
         content_array[:border_pixels, :border_pixels] = tl_stretched
         
-        # TOP-RIGHT corner: stretch 1mm×1mm → 3mm×3mm
+        # TOP-RIGHT corner: stretch configurable×configurable → 3mm×3mm
         tr_stretched = self._stretch_corner_region(tr_corner_region, border_pixels)
         content_array[:border_pixels, border_pixels + orig_width:] = tr_stretched
         
-        # BOTTOM-LEFT corner: stretch 1mm×1mm → 3mm×3mm
+        # BOTTOM-LEFT corner: stretch configurable×configurable → 3mm×3mm
         bl_stretched = self._stretch_corner_region(bl_corner_region, border_pixels)
         content_array[border_pixels + orig_height:, :border_pixels] = bl_stretched
         
-        # BOTTOM-RIGHT corner: stretch 1mm×1mm → 3mm×3mm
+        # BOTTOM-RIGHT corner: stretch configurable×configurable → 3mm×3mm
         br_stretched = self._stretch_corner_region(br_corner_region, border_pixels)
         content_array[border_pixels + orig_height:, border_pixels + orig_width:] = br_stretched
         
-        print("  ✓ Corner areas filled with stretched corner regions (1mm→3mm)")
+        print(f"  ✓ Corner areas filled with stretched corner regions ({source_width_mm}mm→{border_width_mm}mm)")
         
         # Convert back to PIL Image
         result_image = Image.fromarray(content_array)
@@ -171,7 +182,7 @@ class ImageProcessor:
     
     def _stretch_corner_region(self, corner_region, target_size):
         """
-        Stretch a corner region (e.g., 1mm×1mm) to target size (e.g., 3mm×3mm)
+        Stretch a corner region (e.g., configurable mm×mm) to target size (e.g., 3mm×3mm)
         
         Args:
             corner_region (np.array): Source corner region
@@ -259,7 +270,7 @@ class ImageProcessor:
     
     def _generate_clean_gradient_content(self, original_image, border_pixels):
         """
-        Generate content with CLEAN gradients (no fading to black)
+        Generate content with CLEAN gradients using configurable source width
         
         Args:
             original_image (PIL.Image): Original image
@@ -302,8 +313,14 @@ class ImageProcessor:
             content_array[border_pixels:border_pixels+orig_height, border_pixels-1-i] = (left_color * gradient_factor).astype(orig_array.dtype)
             content_array[border_pixels:border_pixels+orig_height, border_pixels+orig_width+i] = (right_color * gradient_factor).astype(orig_array.dtype)
         
-        # Fill corners with STRETCHED corner regions (same as edge_repeat method)
-        corner_source_pixels = max(1, border_pixels // 3)
+        # Fill corners with STRETCHED corner regions using configurable source width
+        source_width_mm = self.settings.get('stretch_source_width_mm', 1.0)
+        dpi = self.settings.get('output_dpi', 300)
+        source_width_pixels = self._mm_to_pixels(source_width_mm, dpi)
+        
+        max_source_pixels = min(orig_width // 4, orig_height // 4, border_pixels)
+        corner_source_pixels = min(source_width_pixels, max_source_pixels)
+        corner_source_pixels = max(1, corner_source_pixels)
         
         # Extract and stretch corner regions
         tl_corner_region = orig_array[:corner_source_pixels, :corner_source_pixels].copy()
