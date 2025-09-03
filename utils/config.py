@@ -6,6 +6,7 @@ import configparser
 import os
 from pathlib import Path
 import json
+import sys
 
 class Config:
     """Configuration management for PDF Border Tool"""
@@ -16,26 +17,40 @@ class Config:
         self.config = configparser.ConfigParser()
         
         # Ensure config directory exists
-        self.config_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self.config_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            print(f"Warning: Could not create config directory: {e}")
+            # Fallback to current directory
+            self.config_dir = Path(".")
+            self.config_file = self.config_dir / "settings.ini"
         
         # Load or create default configuration
         self.load_settings()
     
     def _get_config_directory(self):
         """
-        Get platform-appropriate configuration directory
+        Get configuration directory - same folder as executable
         
         Returns:
             Path: Configuration directory path
         """
-        if os.name == 'nt':  # Windows
-            config_base = Path(os.environ.get('APPDATA', Path.home()))
-        elif os.name == 'posix':  # macOS/Linux
-            config_base = Path(os.environ.get('XDG_CONFIG_HOME', Path.home() / '.config'))
-        else:
-            config_base = Path.home()
-        
-        return config_base / 'PDFBorderTool'
+        try:
+            # Get the directory where the executable/script is located
+            if getattr(sys, 'frozen', False):
+                # Running as compiled executable
+                app_dir = Path(sys.executable).parent
+            else:
+                # Running as script
+                app_dir = Path(sys.argv[0]).parent.resolve()
+            
+            print(f"Using config directory: {app_dir}")
+            return app_dir
+            
+        except Exception as e:
+            print(f"Error determining app directory: {e}")
+            # Fallback to current directory
+            return Path(".")
     
     def get_default_settings(self):
         """
@@ -79,6 +94,7 @@ class Config:
             
             # Advanced settings
             'border_color': '#FFFFFF',
+            'solid_color': '#FFFFFF',
             'max_file_size_mb': 100,
             'temp_directory': '',
             'log_level': 'INFO',
@@ -90,41 +106,60 @@ class Config:
     
     def load_settings(self):
         """Load settings from configuration file"""
-        # Set defaults first
-        defaults = self.get_default_settings()
-        
-        # Create sections
-        self.config.add_section('GENERAL')
-        self.config.add_section('PROCESSING') 
-        self.config.add_section('OUTPUT')
-        self.config.add_section('UI')
-        self.config.add_section('ADVANCED')
-        
-        # Set defaults in config
-        for key, value in defaults.items():
-            section = self._get_setting_section(key)
-            if isinstance(value, list):
-                self.config.set(section, key, json.dumps(value))
+        try:
+            # Set defaults first
+            defaults = self.get_default_settings()
+            
+            # Create sections
+            self.config.add_section('GENERAL')
+            self.config.add_section('PROCESSING') 
+            self.config.add_section('OUTPUT')
+            self.config.add_section('UI')
+            self.config.add_section('ADVANCED')
+            
+            # Set defaults in config
+            for key, value in defaults.items():
+                section = self._get_setting_section(key)
+                if isinstance(value, list):
+                    self.config.set(section, key, json.dumps(value))
+                else:
+                    self.config.set(section, key, str(value))
+            
+            # Load from file if exists
+            if self.config_file.exists():
+                try:
+                    self.config.read(self.config_file)
+                    print(f"Loaded settings from: {self.config_file}")
+                except Exception as e:
+                    print(f"Error loading settings: {e}")
+                    print("Using default settings")
             else:
-                self.config.set(section, key, str(value))
-        
-        # Load from file if exists
-        if self.config_file.exists():
-            try:
-                self.config.read(self.config_file)
-                print(f"Loaded settings from: {self.config_file}")
-            except Exception as e:
-                print(f"Error loading settings: {e}")
-                print("Using default settings")
+                print(f"No existing settings file found, using defaults")
+                
+        except Exception as e:
+            print(f"Error in load_settings: {e}")
     
     def save_settings(self):
-        """Save current settings to file"""
+        """Save current settings to file with error handling"""
         try:
-            with open(self.config_file, 'w') as f:
+            # Don't save during processing to avoid blocking
+            temp_file = self.config_file.with_suffix('.tmp')
+            
+            # Write to temporary file first
+            with open(temp_file, 'w') as f:
                 self.config.write(f)
-            print(f"Settings saved to: {self.config_file}")
+            
+            # Atomic rename to actual file
+            temp_file.replace(self.config_file)
+            
+            # Only print success message occasionally to avoid spam
+            if not hasattr(self, '_last_save_printed'):
+                print(f"Settings saved to: {self.config_file}")
+                self._last_save_printed = True
+                
         except Exception as e:
-            print(f"Error saving settings: {e}")
+            print(f"Warning: Could not save settings: {e}")
+            # Don't raise exception - just continue
     
     def get_setting(self, key, default=None):
         """
@@ -160,21 +195,25 @@ class Config:
             key (str): Setting key
             value: Setting value
         """
-        section = self._get_setting_section(key)
-        
-        # Ensure section exists
-        if not self.config.has_section(section):
-            self.config.add_section(section)
-        
-        # Convert value to string for storage
-        if isinstance(value, list):
-            str_value = json.dumps(value)
-        elif isinstance(value, bool):
-            str_value = str(value)
-        else:
-            str_value = str(value)
-        
-        self.config.set(section, key, str_value)
+        try:
+            section = self._get_setting_section(key)
+            
+            # Ensure section exists
+            if not self.config.has_section(section):
+                self.config.add_section(section)
+            
+            # Convert value to string for storage
+            if isinstance(value, list):
+                str_value = json.dumps(value)
+            elif isinstance(value, bool):
+                str_value = str(value)
+            else:
+                str_value = str(value)
+            
+            self.config.set(section, key, str_value)
+            
+        except Exception as e:
+            print(f"Error setting {key}={value}: {e}")
     
     def get_all_settings(self):
         """
@@ -185,35 +224,43 @@ class Config:
         """
         settings = {}
         
-        for section_name in self.config.sections():
-            for key, value in self.config.items(section_name):
-                settings[key] = self._convert_setting_value(key, value)
+        try:
+            for section_name in self.config.sections():
+                for key, value in self.config.items(section_name):
+                    settings[key] = self._convert_setting_value(key, value)
+        except Exception as e:
+            print(f"Error getting all settings: {e}")
+            return self.get_default_settings()
         
         return settings
     
     def restore_defaults(self):
         """Restore all settings to defaults"""
-        defaults = self.get_default_settings()
-        
-        # Clear current config
-        for section in self.config.sections():
-            self.config.remove_section(section)
-        
-        # Recreate with defaults
-        self.config.add_section('GENERAL')
-        self.config.add_section('PROCESSING')
-        self.config.add_section('OUTPUT') 
-        self.config.add_section('UI')
-        self.config.add_section('ADVANCED')
-        
-        for key, value in defaults.items():
-            section = self._get_setting_section(key)
-            if isinstance(value, list):
-                self.config.set(section, key, json.dumps(value))
-            else:
-                self.config.set(section, key, str(value))
-        
-        print("Settings restored to defaults")
+        try:
+            defaults = self.get_default_settings()
+            
+            # Clear current config
+            for section in self.config.sections():
+                self.config.remove_section(section)
+            
+            # Recreate with defaults
+            self.config.add_section('GENERAL')
+            self.config.add_section('PROCESSING')
+            self.config.add_section('OUTPUT') 
+            self.config.add_section('UI')
+            self.config.add_section('ADVANCED')
+            
+            for key, value in defaults.items():
+                section = self._get_setting_section(key)
+                if isinstance(value, list):
+                    self.config.set(section, key, json.dumps(value))
+                else:
+                    self.config.set(section, key, str(value))
+            
+            print("Settings restored to defaults")
+            
+        except Exception as e:
+            print(f"Error restoring defaults: {e}")
     
     def add_recent_file(self, file_path):
         """
@@ -222,21 +269,25 @@ class Config:
         Args:
             file_path (str): Path to recently processed file
         """
-        recent_files = self.get_setting('recent_files', [])
-        
-        # Remove if already exists
-        if file_path in recent_files:
-            recent_files.remove(file_path)
-        
-        # Add to beginning
-        recent_files.insert(0, file_path)
-        
-        # Limit list size
-        max_recent = self.get_setting('max_recent_files', 10)
-        recent_files = recent_files[:max_recent]
-        
-        # Save updated list
-        self.set_setting('recent_files', recent_files)
+        try:
+            recent_files = self.get_setting('recent_files', [])
+            
+            # Remove if already exists
+            if file_path in recent_files:
+                recent_files.remove(file_path)
+            
+            # Add to beginning
+            recent_files.insert(0, file_path)
+            
+            # Limit list size
+            max_recent = self.get_setting('max_recent_files', 10)
+            recent_files = recent_files[:max_recent]
+            
+            # Save updated list
+            self.set_setting('recent_files', recent_files)
+            
+        except Exception as e:
+            print(f"Error adding recent file: {e}")
     
     def get_recent_files(self):
         """
@@ -245,19 +296,24 @@ class Config:
         Returns:
             list: List of existing recent file paths
         """
-        recent_files = self.get_setting('recent_files', [])
-        
-        # Filter out files that no longer exist
-        existing_files = []
-        for file_path in recent_files:
-            if Path(file_path).exists():
-                existing_files.append(file_path)
-        
-        # Update list if any files were removed
-        if len(existing_files) != len(recent_files):
-            self.set_setting('recent_files', existing_files)
-        
-        return existing_files
+        try:
+            recent_files = self.get_setting('recent_files', [])
+            
+            # Filter out files that no longer exist
+            existing_files = []
+            for file_path in recent_files:
+                if Path(file_path).exists():
+                    existing_files.append(file_path)
+            
+            # Update list if any files were removed
+            if len(existing_files) != len(recent_files):
+                self.set_setting('recent_files', existing_files)
+            
+            return existing_files
+            
+        except Exception as e:
+            print(f"Error getting recent files: {e}")
+            return []
     
     def _get_setting_section(self, key):
         """
@@ -280,7 +336,7 @@ class Config:
         ui_keys = ['window_width', 'window_height', 'window_x', 'window_y',
                   'splitter_sizes', 'show_preview']
         
-        advanced_keys = ['border_color', 'max_file_size_mb', 'temp_directory', 
+        advanced_keys = ['border_color', 'solid_color', 'max_file_size_mb', 'temp_directory', 
                         'log_level', 'recent_files', 'max_recent_files']
         
         if key in processing_keys:
@@ -391,23 +447,30 @@ class Config:
         Returns:
             Path: Temporary directory path
         """
-        temp_dir = self.get_setting('temp_directory', '')
-        
-        if temp_dir and Path(temp_dir).exists():
-            return Path(temp_dir)
-        else:
-            # Use system temp directory
+        try:
+            temp_dir = self.get_setting('temp_directory', '')
+            
+            if temp_dir and Path(temp_dir).exists():
+                return Path(temp_dir)
+            else:
+                # Use system temp directory
+                import tempfile
+                return Path(tempfile.gettempdir()) / 'PDFBorderTool'
+                
+        except Exception as e:
+            print(f"Error getting temp directory: {e}")
             import tempfile
             return Path(tempfile.gettempdir()) / 'PDFBorderTool'
     
     def cleanup_temp_files(self):
         """Clean up temporary files"""
-        temp_dir = self.get_temp_directory()
-        
-        if temp_dir.exists():
-            try:
+        try:
+            temp_dir = self.get_temp_directory()
+            
+            if temp_dir.exists():
                 import shutil
                 shutil.rmtree(temp_dir)
                 print(f"Cleaned up temporary files: {temp_dir}")
-            except Exception as e:
-                print(f"Error cleaning temp files: {e}")
+                
+        except Exception as e:
+            print(f"Error cleaning temp files: {e}")
