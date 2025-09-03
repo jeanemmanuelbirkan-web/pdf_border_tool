@@ -55,14 +55,14 @@ class PDFProcessor:
                 if center_image:
                     print(f"Processing page {page_num + 1}: Found center image")
                     
-                    # Detect cut marks
+                    # Detect cut marks BEFORE processing
                     cut_marks = self.cut_mark_detector.detect_cut_marks(page)
                     
                     # Process the image
                     processed_image = self._process_page_image(page, center_image, cut_marks)
                     
-                    # Replace image in PDF - FIXED METHOD
-                    self._replace_image_in_page(page, center_image, processed_image)
+                    # Replace image in PDF with cut mark preservation
+                    self._replace_image_in_page(page, center_image, processed_image, cut_marks)
                     
                 else:
                     print(f"Page {page_num + 1}: No center image found, skipping")
@@ -240,24 +240,25 @@ class PDFProcessor:
         border_width_mm = self.settings.get('border_width_mm', 3)
         dpi = self.settings.get('output_dpi', 300)
         
+        print(f"Creating border: {border_width_mm}mm at {dpi} DPI")
         processed_image = self.image_processor.add_border(
             original_image, border_width_mm, dpi)
         
         # Apply any additional processing based on cut marks
-        if cut_marks and self.settings.get('auto_detect_cut_marks', True):
+        if cut_marks and cut_marks.get('detected', False):
             processed_image = self._adjust_for_cut_marks(processed_image, cut_marks)
         
         return processed_image
     
-    def _replace_image_in_page(self, page, image_info, new_image):
+    def _replace_image_in_page(self, page, image_info, new_image, cut_marks=None):
         """
-        FIXED: Replace image in PDF page with processed version
-        This version properly replaces the image instead of overlaying
+        IMPROVED: Replace image while preserving cut marks
         
         Args:
             page: PyMuPDF page object
             image_info: Original image information
             new_image: PIL.Image - New image to insert
+            cut_marks: Cut mark detection results
         """
         try:
             # Get original image rectangle and center
@@ -283,9 +284,41 @@ class PDFProcessor:
                 old_center_y + new_height / 2
             )
             
+            # IMPORTANT: Check if new rectangle would interfere with page edges/cut marks
+            page_rect = page.rect
+            margin_for_cut_marks = self._mm_to_points(5)  # 5mm margin for cut marks
+            
+            # If we have detected cut marks, use their safe zone
+            if cut_marks and cut_marks.get('detected', False):
+                safe_zone = cut_marks.get('safe_zone', {})
+                if safe_zone:
+                    safe_rect = fitz.Rect(
+                        max(new_rect.x0, safe_zone.get('x', margin_for_cut_marks)),
+                        max(new_rect.y0, safe_zone.get('y', margin_for_cut_marks)),
+                        min(new_rect.x1, safe_zone.get('x', 0) + safe_zone.get('width', page_rect.width - 2*margin_for_cut_marks)),
+                        min(new_rect.y1, safe_zone.get('y', 0) + safe_zone.get('height', page_rect.height - 2*margin_for_cut_marks))
+                    )
+                    print(f"Using cut mark safe zone: {safe_zone}")
+                else:
+                    safe_rect = new_rect
+            else:
+                # Ensure new image doesn't go too close to page edges
+                safe_rect = fitz.Rect(
+                    max(new_rect.x0, margin_for_cut_marks),
+                    max(new_rect.y0, margin_for_cut_marks),
+                    min(new_rect.x1, page_rect.width - margin_for_cut_marks),
+                    min(new_rect.y1, page_rect.height - margin_for_cut_marks)
+                )
+            
+            # If we had to constrain the rectangle, adjust accordingly
+            if safe_rect != new_rect:
+                print(f"Constraining image to preserve cut marks:")
+                print(f"  Original planned: {new_rect}")
+                print(f"  Safe zone:        {safe_rect}")
+                new_rect = safe_rect
+            
             # Ensure the image is in RGB format
             if new_image.mode in ('RGBA', 'LA'):
-                # Convert transparency to white background
                 background = Image.new('RGB', new_image.size, (255, 255, 255))
                 if new_image.mode == 'RGBA':
                     background.paste(new_image, mask=new_image.split()[-1])
@@ -301,29 +334,29 @@ class PDFProcessor:
             new_image.save(img_buffer, format='JPEG', quality=quality, optimize=True)
             img_buffer.seek(0)
             
-            # METHOD 1: Remove original image by covering with white rectangle
-            # Make the white rectangle slightly larger to ensure complete coverage
+            # METHOD: More precise original image removal
+            # Only cover the exact original image area, not beyond
             cover_rect = fitz.Rect(
-                old_rect.x0 - 1,
-                old_rect.y0 - 1,
-                old_rect.x1 + 1,
-                old_rect.y1 + 1
+                old_rect.x0,
+                old_rect.y0,
+                old_rect.x1,
+                old_rect.y1
             )
             
-            # Draw white rectangle to completely cover original image
+            # Draw white rectangle to cover ONLY the original image (preserves cut marks)
             page.draw_rect(cover_rect, color=(1, 1, 1), fill=(1, 1, 1))
             
             # Insert the new bordered image
             page.insert_image(new_rect, stream=img_buffer.getvalue())
             
-            print(f"Successfully replaced image:")
+            print(f"Image replacement with cut mark preservation:")
             print(f"  Original: {old_width:.1f} x {old_height:.1f} at ({old_rect.x0:.1f}, {old_rect.y0:.1f})")
-            print(f"  New:      {new_width:.1f} x {new_height:.1f} at ({new_rect.x0:.1f}, {new_rect.y0:.1f})")
+            print(f"  New:      {new_rect.width:.1f} x {new_rect.height:.1f} at ({new_rect.x0:.1f}, {new_rect.y0:.1f})")
             print(f"  Border:   {border_width_mm}mm ({border_points:.1f} points)")
             
         except Exception as e:
             print(f"Error in image replacement: {e}")
-            # Fallback: try simple overlay
+            # Fallback: try simple overlay without cut mark detection
             self._fallback_image_replacement(page, image_info, new_image)
     
     def _fallback_image_replacement(self, page, image_info, new_image):
@@ -340,7 +373,6 @@ class PDFProcessor:
             
             old_rect = image_info['rect']
             
-            # Simple approach: just place new image at same location
             # Convert image
             if new_image.mode != 'RGB':
                 new_image = new_image.convert('RGB')
@@ -350,8 +382,19 @@ class PDFProcessor:
             new_image.save(img_buffer, format='JPEG', quality=90)
             img_buffer.seek(0)
             
-            # Insert at original location
-            page.insert_image(old_rect, stream=img_buffer.getvalue())
+            # Cover original image
+            page.draw_rect(old_rect, color=(1, 1, 1), fill=(1, 1, 1))
+            
+            # Insert at original location with slight expansion
+            border_points = self._mm_to_points(3)
+            expanded_rect = fitz.Rect(
+                old_rect.x0 - border_points/2,
+                old_rect.y0 - border_points/2,
+                old_rect.x1 + border_points/2,
+                old_rect.y1 + border_points/2
+            )
+            
+            page.insert_image(expanded_rect, stream=img_buffer.getvalue())
             
             print("Fallback replacement completed")
             
@@ -369,7 +412,13 @@ class PDFProcessor:
         Returns:
             PIL.Image: Adjusted image
         """
-        # Placeholder for cut mark adjustment logic
+        if not cut_marks.get('detected', False):
+            return image
+        
+        print(f"Adjusting image for {len(cut_marks.get('marks', []))} detected cut marks")
+        
+        # For now, return image as-is since positioning is handled in replacement
+        # Future: Could implement image cropping/adjustment if needed
         return image
     
     def _generate_output_path(self, input_path):
